@@ -1,11 +1,7 @@
-//#include <ros/ros.h>
 #include "rclcpp/rclcpp.hpp"
-//#include <ros/console.h>
+#include "rclcpp_action/rclcpp_action.hpp"
+
 #include <ament_index_cpp/get_package_share_directory.hpp>
-//#include <ros/package.h>
-
-
-//#include <actionlib/server/simple_action_server.h>
 
 #include <geometry_msgs/msg/point.hpp>
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
@@ -13,43 +9,154 @@
 #include <geometry_msgs/msg/inertia.hpp>
 #include <std_srvs/srv/set_bool.hpp>
 
-#include <hebi_cpp_api_examples/msg/target_waypoints.hpp>
-#include <hebi_cpp_api_examples/action/ArmMotionAction.hpp>
-#include <hebi_cpp_api_examples/srv/set_ik_seed.hpp>
+#include <hebi_msgs/msg/target_waypoints.hpp>
+#include <hebi_msgs/action/arm_motion.hpp>
+#include <hebi_msgs/srv/set_ik_seed.hpp>
 
 #include "hebi_cpp_api/group_command.hpp"
-
 #include "hebi_cpp_api/robot_model.hpp"
-
 #include "hebi_cpp_api/arm/arm.hpp"
+
 
 namespace arm = hebi::experimental::arm;
 
 namespace hebi {
 namespace ros {
 
-class ArmNode {
+class ArmNode : public rclcpp::Node {
 public:
-  ArmNode(::ros::NodeHandle* nh, arm::Arm& arm, const Eigen::VectorXd& home_position, std::vector<std::string> link_names) : nh_(*nh),
-       arm_(arm),
-       home_position_(home_position),
-       action_server_(*nh, "motion", boost::bind(&ArmNode::startArmMotion, this, _1), false),
-       offset_target_subscriber_(nh->subscribe<geometry_msgs::Point>("offset_target", 50, &ArmNode::offsetTargetCallback, this)),
-       set_target_subscriber_(nh->subscribe<geometry_msgs::Point>("set_target", 50, &ArmNode::setTargetCallback, this)),
-       cartesian_waypoint_subscriber_(nh->subscribe<hebi_cpp_api_examples::TargetWaypoints>("cartesian_waypoints", 50, &hebi::ros::ArmNode::updateCartesianWaypoints, this)),
-       compliant_mode_service_(nh->advertiseService("compliance_mode", &ArmNode::setCompliantMode, this)),
-       ik_seed_service_(nh->advertiseService("set_ik_seed", &hebi::ros::ArmNode::handleIKSeedService, this)),
-       joint_waypoint_subscriber_(nh->subscribe<trajectory_msgs::JointTrajectory>("joint_waypoints", 50, &ArmNode::updateJointWaypoints, this)),
-       arm_state_pub_(nh->advertise<sensor_msgs::JointState>("joint_states", 50)),
-       center_of_mass_publisher_(nh->advertise<geometry_msgs::Inertia>("inertia", 100)) {
+  ArmNode(arm::Arm& arm, const Eigen::VectorXd& home_position, std::vector<std::string> link_names)
+    : Node("arm_node"),
+      arm_(arm),
+      home_position_(home_position),
+      offset_target_subscriber_(create_subscription<geometry_msgs::msg::Point>("offset_target", 50, std::bind(&ArmNode::offsetTargetCallback, this, std::placeholders::_1))),
+      set_target_subscriber_(create_subscription<geometry_msgs::msg::Point>("set_target", 50, std::bind(&ArmNode::setTargetCallback, this, std::placeholders::_1))),
+      cartesian_waypoint_subscriber_(create_subscription<hebi_msgs::msg::TargetWaypoints>("cartesian_waypoints", 50, std::bind(&ArmNode::cartesianWaypointsCallback, this, std::placeholders::_1))),
+      joint_waypoint_subscriber_(create_subscription<trajectory_msgs::msg::JointTrajectory>("joint_waypoints", 50, std::bind(&ArmNode::jointWaypointsCallback, this, std::placeholders::_1))),
+      arm_state_pub_(create_publisher<sensor_msgs::msg::JointState>("joint_states", 50)),
+      center_of_mass_publisher_(create_publisher<geometry_msgs::msg::Inertia>("inertia", 100)),
+      compliant_mode_service_(create_service<std_srvs::srv::SetBool>("compliance_mode", std::bind(&ArmNode::setCompliantMode, this, std::placeholders::_1, std::placeholders::_2))),
+      ik_seed_service_(create_service<hebi_msgs::srv::SetIKSeed>("set_ik_seed", std::bind(&ArmNode::handleIKSeedService, this, std::placeholders::_1, std::placeholders::_2))) {
 
     //TODO: Figure out a way to get link names from the arm, so it doesn't need to be input separately
-    state_msg_.name = link_names;
+    this->state_msg_.name = link_names;
 
     // start the action server
-    action_server_.start();
+    // this->action_server_ = rclcpp_action::create_server<hebi_msgs::action::ArmMotion>(
+    //   this,
+    //   "motion",
+    //   std::bind(&ArmNode::handleArmMotionGoal, this, std::placeholders::_1, std::placeholders::_2),
+    //   std::bind(&ArmNode::handleArmMotionCancel, this, std::placeholders::_1),
+    //   std::bind(&ArmNode::handleArmMotionAccepted, this, std::placeholders::_1));
   }
 
+  //////////////////////// SUBSCRIBER CALLBACK FUNCTIONS ////////////////////////
+
+  // Callback for trajectories with joint angle waypoints
+  void jointWaypointsCallback(const trajectory_msgs::msg::JointTrajectory::SharedPtr joint_trajectory) {
+    // Stop current action if any
+    // if (action_server_->is_available())
+    //   action_server_->set_aborted(action_server_->get_current_goal_handle());
+    
+    auto num_joints = arm_.size();
+    auto num_waypoints = joint_trajectory->points.size();
+    Eigen::MatrixXd pos(num_joints, num_waypoints);
+    Eigen::MatrixXd vel(num_joints, num_waypoints);
+    Eigen::MatrixXd accel(num_joints, num_waypoints);
+    Eigen::VectorXd times(num_waypoints);
+
+    for (size_t waypoint = 0; waypoint < num_waypoints; ++waypoint) {
+      auto& cmd_waypoint = joint_trajectory->points[waypoint];
+
+      if (cmd_waypoint.positions.size() != num_joints ||
+          cmd_waypoint.velocities.size() != num_joints ||
+          cmd_waypoint.accelerations.size() != num_joints) {
+        RCLCPP_ERROR_STREAM(this->get_logger(), "Position, velocity, and acceleration sizes not correct for waypoint index " << waypoint);
+        return;
+      }
+
+      if (!cmd_waypoint.effort.empty()) {
+        RCLCPP_WARN_STREAM(this->get_logger(), "Effort commands in trajectories not supported; ignoring");
+      }
+
+      for (size_t joint = 0; joint < num_joints; ++joint) {
+        pos(joint, waypoint) = cmd_waypoint.positions[joint];
+        vel(joint, waypoint) = cmd_waypoint.velocities[joint];
+        accel(joint, waypoint) = cmd_waypoint.accelerations[joint];
+      }
+
+      times(waypoint) = cmd_waypoint.time_from_start.sec;
+    }
+    updateJointWaypoints(pos, vel, accel, times);
+  }
+
+  // Callback for trajectories with cartesian position waypoints
+  void cartesianWaypointsCallback(const hebi_msgs::msg::TargetWaypoints::SharedPtr target_waypoints) {
+    // Stop current action if any
+    // if (action_server_->is_available())
+    //   action_server_->set_aborted(action_server_->get_current_goal_handle());
+
+    // Fill in an Eigen::Matrix3xd with the xyz goal
+    size_t num_waypoints = target_waypoints->waypoints_vector.size();
+    Eigen::Matrix3Xd xyz_waypoints(3, num_waypoints);
+    for (size_t i = 0; i < num_waypoints; ++i) {
+      const auto& xyz_waypoint = target_waypoints->waypoints_vector[i];
+      xyz_waypoints(0, i) = xyz_waypoint.x;
+      xyz_waypoints(1, i) = xyz_waypoint.y;
+      xyz_waypoints(2, i) = xyz_waypoint.z;
+    }
+
+    // Replan
+    updateCartesianWaypoints(xyz_waypoints);
+  }
+
+  // Set the target end effector location in (x,y,z) space, replanning
+  // smoothly to the new location
+  void setTargetCallback(const geometry_msgs::msg::Point::SharedPtr data) {
+    // Stop current action if any
+    // if (action_server_-->is_available())
+      // action_server_-->set_aborted(action_server_->get_current_goal_handle());
+
+    // Fill in an Eigen::Matrix3Xd with the xyz goal
+    Eigen::Matrix3Xd xyz_waypoints(3, 1);
+    xyz_waypoints(0, 0) = data->x;
+    xyz_waypoints(1, 0) = data->y;
+    xyz_waypoints(2, 0) = data->z;
+
+    // Replan
+    updateCartesianWaypoints(xyz_waypoints);
+  }
+
+  // "Jog" the target end effector location in (x,y,z) space, replanning
+  // smoothly to the new location
+  void offsetTargetCallback(const geometry_msgs::msg::Point::SharedPtr data) {
+    // Stop current action if any
+    // if (action_server_-->is_available())
+    //   action_server_-->set_aborted(action_server_->get_current_goal_handle());
+
+    // Only update if target changes!
+    if (data->x == 0 && data->y == 0 && data->z == 0)
+      return;
+
+    // Initialize target from feedback as necessary
+    if (!isTargetInitialized()) {
+      auto pos = arm_.FK(arm_.lastFeedback().getPositionCommand());
+      target_xyz_.x() = pos.x();
+      target_xyz_.y() = pos.y();
+      target_xyz_.z() = pos.z();
+    }
+
+    // Fill in an Eigen::Matrix3Xd with the xyz goal
+    Eigen::Matrix3Xd xyz_waypoints(3, 1);
+    xyz_waypoints(0, 0) = target_xyz_.x() + data->x;
+    xyz_waypoints(1, 0) = target_xyz_.y() + data->y;
+    xyz_waypoints(2, 0) = target_xyz_.z() + data->z;
+
+    // Replan
+    updateCartesianWaypoints(xyz_waypoints);
+  }
+
+  //////////////////////// SERVICE HANDLER FUNCTIONS ////////////////////////
   bool setIKSeed(const std::vector<double>& ik_seed) {
     if(ik_seed.size() != home_position_.size()) {
       use_ik_seed_ = false;
@@ -63,213 +170,136 @@ public:
     return use_ik_seed_;
   }
 
-  bool handleIKSeedService(hebi_cpp_api_examples::SetIKSeed::Request& req, hebi_cpp_api_examples::SetIKSeed::Response& res) {
-    return setIKSeed(req.seed);
+  bool handleIKSeedService(const std::shared_ptr<hebi_msgs::srv::SetIKSeed::Request> req, std::shared_ptr<hebi_msgs::srv::SetIKSeed::Response> res) {
+    return setIKSeed(req->seed);
   }
 
-  // Callback for trajectories with joint angle waypoints
-  void updateJointWaypoints(trajectory_msgs::JointTrajectory joint_trajectory) {
-    auto num_joints = arm_.size();
-    auto num_waypoints = joint_trajectory.points.size();
-    Eigen::MatrixXd pos(num_joints, num_waypoints);
-    Eigen::MatrixXd vel(num_joints, num_waypoints);
-    Eigen::MatrixXd accel(num_joints, num_waypoints);
-    Eigen::VectorXd times(num_waypoints);
-    for (size_t waypoint = 0; waypoint < num_waypoints; ++waypoint) {
-      auto& cmd_waypoint = joint_trajectory.points[waypoint];
-
-      if (cmd_waypoint.positions.size() != num_joints ||
-          cmd_waypoint.velocities.size() != num_joints ||
-          cmd_waypoint.accelerations.size() != num_joints) {
-        ROS_ERROR_STREAM("Position, velocity, and acceleration sizes not correct for waypoint index " << waypoint);
-        return;
-      }
-
-      if (cmd_waypoint.effort.size() != 0) {
-        ROS_WARN_STREAM("Effort commands in trajectories not supported; ignoring");
-      }
-
-      for (size_t joint = 0; joint < num_joints; ++joint) {
-        pos(joint, waypoint) = joint_trajectory.points[waypoint].positions[joint];
-        vel(joint, waypoint) = joint_trajectory.points[waypoint].velocities[joint];
-        accel(joint, waypoint) = joint_trajectory.points[waypoint].accelerations[joint];
-      }
-
-      times(waypoint) = cmd_waypoint.time_from_start.toSec();
-    }
-    updateJointWaypoints(pos, vel, accel, times);
-  }
-
-  void updateCartesianWaypoints(hebi_cpp_api_examples::TargetWaypoints target_waypoints) {
-    if (action_server_.isActive())
-      action_server_.setAborted();
-
-    // Fill in an Eigen::Matrix3xd with the xyz goal
-    size_t num_waypoints = target_waypoints.waypoints_vector.size();
-    Eigen::Matrix3Xd xyz_waypoints(3, num_waypoints);
-    for (size_t i = 0; i < num_waypoints; ++i) {
-      const auto& xyz_waypoint = target_waypoints.waypoints_vector[i];
-      xyz_waypoints(0, i) = xyz_waypoint.x;
-      xyz_waypoints(1, i) = xyz_waypoint.y;
-      xyz_waypoints(2, i) = xyz_waypoint.z;
-    }
-
-    // Replan
-    updateCartesianWaypoints(xyz_waypoints);
-  }
-
-  // Set the target end effector location in (x,y,z) space, replanning
-  // smoothly to the new location
-  void setTargetCallback(geometry_msgs::Point data) {
-    if (action_server_.isActive())
-      action_server_.setAborted();
-
-    // Fill in an Eigen::Matrix3xd with the xyz goal
-    Eigen::Matrix3Xd xyz_waypoints(3, 1);
-    xyz_waypoints(0, 0) = data.x;
-    xyz_waypoints(1, 0) = data.y;
-    xyz_waypoints(2, 0) = data.z;
-
-    // Replan
-    updateCartesianWaypoints(xyz_waypoints);
-  }
-
-  // "Jog" the target end effector location in (x,y,z) space, replanning
-  // smoothly to the new location
-  void offsetTargetCallback(geometry_msgs::Point data) {
-    if (action_server_.isActive())
-      action_server_.setAborted();
-
-    // Only update if target changes!
-    if (data.x == 0 && data.y == 0 && data.z == 0)
-      return;
-
-    // Initialize target from feedback as necessary
-    if (!isTargetInitialized()) {
-      auto pos = arm_.FK(arm_.lastFeedback().getPositionCommand());
-      target_xyz_.x() = pos.x();
-      target_xyz_.y() = pos.y();
-      target_xyz_.z() = pos.z();
-    }
-
-    // Fill in an Eigen::Matrix3xd with the xyz goal
-    Eigen::Matrix3Xd xyz_waypoints(3, 1);
-    xyz_waypoints(0, 0) = target_xyz_.x() + data.x;
-    xyz_waypoints(1, 0) = target_xyz_.y() + data.y;
-    xyz_waypoints(2, 0) = target_xyz_.z() + data.z;
-
-    // Replan
-    updateCartesianWaypoints(xyz_waypoints);
-  }
-
-  bool setCompliantMode(std_srvs::SetBool::Request &req,
-		        std_srvs::SetBool::Response &res) {
-    if (req.data) {
+  bool setCompliantMode(const std::shared_ptr<std_srvs::srv::SetBool::Request> req, std::shared_ptr<std_srvs::srv::SetBool::Response> res) {
+    if (req->data) {
       // Go into a passive mode so the system can be moved by hand
-      res.message = "Pausing active command (entering grav comp mode)";
+      res->message = "Pausing active command (entering grav comp mode)";
       arm_.cancelGoal();
-      res.success = true;
+      res->success = true;
     } else {
-      res.message = "Resuming active command";
-      auto t = ::ros::Time::now().toSec();
+      res->message = "Resuming active command";
+      // auto t = rclcpp::Node::now().seconds();
       auto last_position = arm_.lastFeedback().getPosition();
       arm_.setGoal(arm::Goal::createFromPosition(last_position));
       target_xyz_ = arm_.FK(last_position);
-      res.success = true;
+      res->success = true;
     }
     return true;
   }
+
+  //////////////////////// ACTION HANDLER FUNCTIONS ////////////////////////
+
+  // rclcpp_action::GoalResponse handleArmMotionGoal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const hebi_msgs::action::ArmMotion::Goal> goal) {
+  //   RCLCPP_INFO(this->get_logger(), "Received arm motion action request with order %d", goal->order);
+  //   (void)uuid;
+  //   // uncomment if action needs to be rejected 
+  //   // if (reject condition) return rclcpp_action::GoalResponse::REJECT;
+  //   return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+  // }
+
+  // rclcpp_action::CancelResponse handleArmMotionCancel(const std::shared_ptr<rclcpp_action::ServerGoalHandle<hebi_msgs::action::ArmMotion>> goal_handle) {
+  //   RCLCPP_INFO(this->get_logger(), "Received request to cancel arm motion action");
+  //   (void)goal_handle;
+  //   return rclcpp_action::CancelResponse::ACCEPT;
+  // }
+
+  // void handleArmMotionAccepted(const std::shared_ptr<rclcpp_action::ServerGoalHandle<hebi_msgs::action::ArmMotion>> goal_handle) {
+  //   // this needs to return quickly to avoid blocking the executor
+  //   // spin up a new thread to execute the action
+  //   std::thread{std::bind(&ArmNode::startArmMotion, this, std::placeholders::_1), goal_handle}.detach();
+  // }
+
+  // void startArmMotion(const std::shared_ptr<rclcpp_action::ServerGoalHandle<hebi_msgs::action::ArmMotion>> goal_handle) {
+  //   RCLCPP_INFO(this->get_logger(), "Executing arm motion action");
+    
+  //   auto last_position = arm_.lastFeedback().getPosition();
+
+  //   const auto goal = goal_handle->get_goal();
+  //   auto feedback
+
+  //   // Replan a smooth joint trajectory from the current location through a
+  //   // series of cartesian waypoints.
+  //   // TODO: use a single struct instead of 6 single vectors of the same length;
+  //   // but how do we do hierarchial actions?
+  //   size_t num_waypoints = goal->x.size();
+
+  //   Eigen::Matrix3Xd xyz_positions(3, num_waypoints);
+  //   Eigen::Matrix3Xd tip_directions(3, num_waypoints);
+
+  //   // Get joint angles to move to each waypoint
+  //   for (size_t i = 0; i < num_waypoints; ++i) {
+  //     // Special homing values...
+  //     if (goal->x[i] == 100 && goal->y[i] == 100 && goal->z[i] == 100) {
+  //       xyz_positions.col(i) = home_position_;
+  //       tip_directions(0, i) = 1;
+  //       tip_directions(1, i) = 0;
+  //       tip_directions(2, i) = 0;
+  //     }
+  //     else if (goal->x[i] == 101 && goal->y[i] == 101 && goal->z[i] == 101) {
+  //       xyz_positions.col(i) = home_position_;
+  //       tip_directions(0, i) = 0;
+  //       tip_directions(1, i) = 0;
+  //       tip_directions(2, i) = -1;
+  //     }
+  //     else {
+  //       xyz_positions(0, i) = goal->x[i];
+  //       xyz_positions(1, i) = goal->y[i];
+  //       xyz_positions(2, i) = goal->z[i];
+  //       tip_directions(0, i) = goal->tipx[i];
+  //       tip_directions(1, i) = goal->tipy[i];
+  //       tip_directions(2, i) = goal->tipz[i];
+  //     }
+  //   }
+
+  //   updateCartesianWaypoints(xyz_positions, &tip_directions);
+
+  //   // Set LEDs to a particular color, or clear them.
+  //   Color color;
+  //   if (goal->set_color)
+  //     color = Color(goal->r, goal->g, goal->b, 255);
+  //   setColor(color);
+
+  //   // Wait until the action is complete, sending status/feedback along the way.
+  //   rclcpp::Rate r(10);
+
+  //   auto feedback = std::make_shared<hebi_msgs::action::ArmMotion::Feedback>();
+
+  //   while (!arm_.atGoal()) {
+  //     // check if there is a cancel request
+  //     if (goal_handle->is_canceling()) {
+  //       RCLCPP_INFO(this->get_logger(), "Arm motion was cancelled");
+  //       setColor({0, 0, 0, 0});
+  //       return;
+  //     }
+
+  //     // auto t = rclcpp::Node::now().seconds();
+
+  //     // Update and publish progress in feedback
+  //     feedback->percent_complete = arm_.goalProgress() * 100.0;
+  //     goal_handle->publish_feedback(feedback);
+
+  //     // Limit feedback rate
+  //     r.sleep();
+  //   }
+
+  //   setColor({0, 0, 0, 0});
+
+  //   // Publish when the arm is done with a motion
+  //   RCLCPP_INFO(this->get_logger(), "Completed arm motion action");
+  //   goal_handle->succeed();
+  // }
+
+  //////////////////////// OTHER UTILITY FUNCTIONS ////////////////////////
 
   void setColor(const Color& color) {
     auto& command = arm_.pendingCommand();
     for (int i = 0; i < command.size(); ++i) {
       command[i].led().set(color);
     }
-  }
-
-  void startArmMotion(const hebi_cpp_api_examples::ArmMotionGoalConstPtr& goal) {
-    auto last_position = arm_.lastFeedback().getPosition();
-    ROS_INFO("Executing arm motion action");
-
-    // Replan a smooth joint trajectory from the current location through a
-    // series of cartesian waypoints.
-    // TODO: use a single struct instead of 6 single vectors of the same length;
-    // but how do we do hierarchial actions?
-    size_t num_waypoints = goal->x.size();
-
-    Eigen::Matrix3Xd xyz_positions(3, num_waypoints);
-    Eigen::Matrix3Xd tip_directions(3, num_waypoints);
-
-    // Get joint angles to move to each waypoint
-    for (size_t i = 0; i < num_waypoints; ++i) {
-      // Special homing values...
-      if (goal->x[i] == 100 && goal->y[i] == 100 && goal->z[i] == 100) {
-        xyz_positions.col(i) = home_position_;
-        tip_directions(0, i) = 1;
-        tip_directions(1, i) = 0;
-        tip_directions(2, i) = 0;
-      }
-      else if (goal->x[i] == 101 && goal->y[i] == 101 && goal->z[i] == 101) {
-        xyz_positions.col(i) = home_position_;
-        tip_directions(0, i) = 0;
-        tip_directions(1, i) = 0;
-        tip_directions(2, i) = -1;
-      }
-      else {
-        xyz_positions(0, i) = goal->x[i];
-        xyz_positions(1, i) = goal->y[i];
-        xyz_positions(2, i) = goal->z[i];
-        tip_directions(0, i) = goal->tipx[i];
-        tip_directions(1, i) = goal->tipy[i];
-        tip_directions(2, i) = goal->tipz[i];
-      }
-    }
-
-    updateCartesianWaypoints(xyz_positions, &tip_directions);
-
-    // Set LEDs to a particular color, or clear them.
-    Color color;
-    if (goal->set_color)
-      color = Color(goal->r, goal->g, goal->b, 255);
-    setColor(color);
-
-    // Wait until the action is complete, sending status/feedback along the
-    // way.
-    ::ros::Rate r(10);
-
-    hebi_cpp_api_examples::ArmMotionFeedback feedback;
-
-    while (!arm_.atGoal()) {
-      if (action_server_.isPreemptRequested() || !::rclcpp::ok()) {
-        ROS_INFO("Arm motion action was preempted");
-        setColor({0,0,0,0});
-        // Note -- the `startArmMotion` function will not be called until the
-        // action server has been preempted here:
-        action_server_.setPreempted();
-        return;
-      }
-
-      if (!action_server_.isActive() || !::rclcpp::ok()) {
-        ROS_INFO("Arm motion was cancelled");
-        setColor({0,0,0,0});
-        return;
-      }
-
-      auto t = ::ros::Time::now().toSec();
-
-      // Publish progress:
-      feedback.percent_complete = arm_.goalProgress() * 100.0;
-      action_server_.publishFeedback(feedback);
-
-      // Limit feedback rate
-      r.sleep(); 
-    }
-    
-    setColor({0,0,0,0});
-
-    // publish when the arm is done with a motion
-    ROS_INFO("Completed arm motion action");
-    action_server_.setSucceeded();
   }
 
   void publishState() {
@@ -285,13 +315,13 @@ public:
     state_msg_.position.resize(pos.size());
     state_msg_.velocity.resize(vel.size());
     state_msg_.effort.resize(eff.size());
-    state_msg_.header.stamp = ::ros::Time::now();
+    state_msg_.header.stamp = this->now();
 
-    VectorXd::Map(&state_msg_.position[0], pos.size()) = pos;
-    VectorXd::Map(&state_msg_.velocity[0], vel.size()) = vel;
-    VectorXd::Map(&state_msg_.effort[0], eff.size()) = eff;
+    Eigen::VectorXd::Map(&state_msg_.position[0], pos.size()) = pos;
+    Eigen::VectorXd::Map(&state_msg_.velocity[0], vel.size()) = vel;
+    Eigen::VectorXd::Map(&state_msg_.effort[0], eff.size()) = eff;
 
-    arm_state_pub_.publish(state_msg_);
+    arm_state_pub_->publish(state_msg_);
 
     // compute arm CoM
     auto& model = arm_.robotModel();
@@ -315,7 +345,7 @@ public:
     center_of_mass_message_.com.y = weighted_sum_com(1);
     center_of_mass_message_.com.z = weighted_sum_com(2);
 
-    center_of_mass_publisher_.publish(center_of_mass_message_);
+    center_of_mass_publisher_->publish(center_of_mass_message_);
   }
   
 private:
@@ -334,23 +364,21 @@ private:
   Eigen::VectorXd ik_seed_{0};
   bool use_ik_seed_{false};
 
-  ::ros::NodeHandle nh_;
+  sensor_msgs::msg::JointState state_msg_;
+  geometry_msgs::msg::Inertia center_of_mass_message_;
 
-  sensor_msgs::JointState state_msg_;
-  geometry_msgs::Inertia center_of_mass_message_;
+  rclcpp::Subscription<geometry_msgs::msg::Point>::SharedPtr offset_target_subscriber_;
+  rclcpp::Subscription<geometry_msgs::msg::Point>::SharedPtr set_target_subscriber_;
+  rclcpp::Subscription<hebi_msgs::msg::TargetWaypoints>::SharedPtr cartesian_waypoint_subscriber_;
+  rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr joint_waypoint_subscriber_;
 
-  actionlib::SimpleActionServer<hebi_cpp_api_examples::ArmMotionAction> action_server_;
+  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr arm_state_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::Inertia>::SharedPtr center_of_mass_publisher_;
 
-  ::ros::Subscriber offset_target_subscriber_;
-  ::ros::Subscriber set_target_subscriber_;
-  ::ros::Subscriber cartesian_waypoint_subscriber_;
-  ::ros::Subscriber joint_waypoint_subscriber_;
-
-  ::ros::Publisher arm_state_pub_;
-  ::ros::Publisher center_of_mass_publisher_;
-
-  ::ros::ServiceServer compliant_mode_service_;
-  ::ros::ServiceServer ik_seed_service_;
+  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr compliant_mode_service_;
+  rclcpp::Service<hebi_msgs::srv::SetIKSeed>::SharedPtr ik_seed_service_;
+  
+  // rclcpp_action::Server<hebi_msgs::action::ArmMotion>::SharedPtr action_server_;
 
   bool isTargetInitialized() {
     return !std::isnan(target_xyz_.x()) ||
@@ -368,7 +396,7 @@ private:
         angles.cols() != accelerations.cols()    ||
         angles.cols() != times.size()            ||
         angles.cols() == 0) {
-      ROS_ERROR("Angles, velocities, accelerations, or times were not the correct size");
+      RCLCPP_ERROR(this->get_logger(), "Angles, velocities, accelerations, or times were not the correct size");
       return;
     }
 
@@ -383,8 +411,7 @@ private:
   // Replan a smooth joint trajectory from the current location through a
   // series of cartesian waypoints.
   // xyz positions should be a 3xn vector of target positions
-  void updateCartesianWaypoints(const Eigen::Matrix3Xd& xyz_positions,
-      const Eigen::Matrix3Xd* end_tip_directions = nullptr) {
+  void updateCartesianWaypoints(const Eigen::Matrix3Xd& xyz_positions, const Eigen::Matrix3Xd* end_tip_directions = nullptr) {
     // Data sanity check:
     if (end_tip_directions && end_tip_directions->cols() != xyz_positions.cols())
       return;
@@ -414,26 +441,29 @@ private:
         auto fk_check = arm_.FK(last_position);
         auto mag_diff = (last_position - fk_check).norm();
         if (mag_diff > 0.01) {
-          ROS_WARN_STREAM("Target Pose:" << xyz_positions.col(i)[0] << ", "
-                                         << xyz_positions.col(i)[1] << ", "
-                                         << xyz_positions.col(i)[2]);
-          ROS_INFO_STREAM("IK Solution: " << last_position[0] << " | "
-                                          << last_position[1] << " | "
-                                          << last_position[2] << " | "
-                                          << last_position[3] << " | "
-                                          << last_position[4] << " | "
-                                          << last_position[5]);
-          ROS_WARN_STREAM("Pose of IK Solution:" << fk_check[0] << ", "
-                                                 << fk_check[1] << ", "
-                                                 << fk_check[2]);
-          ROS_INFO_STREAM("Distance between target and IK pose: " << mag_diff);
+          RCLCPP_WARN_STREAM(this->get_logger(), "Target Pose: "
+                                                     << xyz_positions.col(i)[0] << ", "
+                                                     << xyz_positions.col(i)[1] << ", "
+                                                     << xyz_positions.col(i)[2]);
+          RCLCPP_INFO_STREAM(this->get_logger(), "IK Solution: "
+                                                    << last_position[0] << " | "
+                                                    << last_position[1] << " | "
+                                                    << last_position[2] << " | "
+                                                    << last_position[3] << " | "
+                                                    << last_position[4] << " | "
+                                                    << last_position[5]);
+          RCLCPP_WARN_STREAM(this->get_logger(), "Pose of IK Solution: "
+                                                   << fk_check[0] << ", "
+                                                   << fk_check[1] << ", "
+                                                   << fk_check[2]);
+          RCLCPP_INFO_STREAM(this->get_logger(), "Distance between target and IK pose: " << mag_diff);
         }
-        positions.col(i) = last_position; 
+        positions.col(i) = last_position;
       }
     } else {
       for (size_t i = 0; i < num_waypoints; ++i) {
         last_position = arm_.solveIK(last_position, xyz_positions.col(i));
-        positions.col(i) = last_position; 
+        positions.col(i) = last_position;
       }
     }
 
@@ -447,13 +477,15 @@ private:
 } // namespace hebi
 
 template <typename T>
-bool loadParam(ros::NodeHandle node, std::string varname, T& var) {
-  if (node.hasParam(varname) && node.getParam(varname, var)) {
-    ROS_INFO_STREAM("Found and successfully read '" << varname << "' parameter");
-    return true;
+bool loadParam(rclcpp::Node::SharedPtr node, std::string varname, T& var) {
+  if (node->has_parameter(varname)) {
+    if (node->get_parameter(varname, var)) {
+      RCLCPP_INFO_STREAM(node->get_logger(), "Found and successfully read '" << varname << "' parameter");
+      return true;
+    }
   }
 
-  ROS_ERROR_STREAM("Could not find/read required '" << varname << "' parameter!");
+  RCLCPP_ERROR_STREAM(node->get_logger(), "Could not find/read required '" << varname << "' parameter!");
   return false;
 }
 
@@ -461,13 +493,14 @@ int main(int argc, char ** argv) {
 
   // Initialize ROS node
   rclcpp::init(argc, argv);
-  auto node = std::make_shared<rclcpp::Node>("arm_node");
+  auto node = rclcpp::Node::make_shared("arm_node");
 
   /////////////////// Load parameters ///////////////////
 
   // Get parameters for name/family of modules; default to standard values:
   std::vector<std::string> families;
-  if (node.hasParam("families") && node.getParam("families", families)) {
+  if (node->has_parameter("families")) {
+    node->get_parameter("families", families);
     RCLCPP_INFO(node->get_logger(), "Found and successfully read 'families' parameter");
   } else {
     RCLCPP_WARN(node->get_logger(), "Could not find/read 'families' parameter; defaulting to 'HEBI'");
@@ -496,7 +529,8 @@ int main(int argc, char ** argv) {
 
   // Get the "home" position for the arm
   std::vector<double> home_position_vector;
-  if (node.hasParam("home_position") && node.getParam("home_position", home_position_vector)) {
+  if (node->has_parameter("home_position")) {
+    node->get_parameter("home_position", home_position_vector);
     RCLCPP_INFO(node->get_logger(), "Found and successfully read 'home_position' parameter");
   } else {
     RCLCPP_WARN(node->get_logger(), "Could not find/read 'home_position' parameter; defaulting to all zeros!");
@@ -508,13 +542,12 @@ int main(int argc, char ** argv) {
   arm::Arm::Params params;
   params.families_ = families;
   params.names_ = names;
-  params.get_current_time_s_ = []() {
-    static double start_time = ros::Time::now().toSec();
-    return ros::Time::now().toSec() - start_time;
+  params.get_current_time_s_ = [node]() {
+    static double start_time = node->now().seconds();
+    return node->now().seconds() - start_time;
   };
 
-  //params.hrdf_file_ = ros::package::getPath(hrdf_package) + std::string("/") + hrdf_file;
-  params.hrdf_file_ = ament_index_cpp::get_package_share_directory(hard_package) + std::string("/") + hrdf_file;
+  params.hrdf_file_ = ament_index_cpp::get_package_share_directory(hrdf_package) + std::string("/") + hrdf_file;
 
   auto arm = arm::Arm::create(params);
   for (int num_tries = 0; num_tries < 3; num_tries++) {
@@ -523,13 +556,13 @@ int main(int argc, char ** argv) {
       break;
     }
     RCLCPP_WARN(node->get_logger(), "Could not initialize arm, trying again...");
-    ros::Duration(1.0).sleep();
+    rclcpp::sleep_for(std::chrono::seconds(1));
   }
 
   if (!arm) {
-    ROS_ERROR_STREAM("Failed to find the following modules in family: " << families.at(0));
+    RCLCPP_ERROR_STREAM(node->get_logger(), "Failed to find the following modules in family: " << families.at(0));
     for(auto it = names.begin(); it != names.end(); ++it) {
-        ROS_ERROR_STREAM("> " << *it);
+        RCLCPP_ERROR_STREAM(node->get_logger(), "> " << *it);
     }
     RCLCPP_ERROR(node->get_logger(), "Could not initialize arm! Check for modules on the network, and ensure good connection (e.g., check packet loss plot in Scope). Shutting down...");
     return -1;
@@ -563,11 +596,11 @@ int main(int argc, char ** argv) {
 
   /////////////////// Initialize ROS interface ///////////////////
 
-  hebi::ros::ArmNode arm_node(&node, *arm, home_position, full_names);
+  hebi::ros::ArmNode arm_node(*arm, home_position, full_names);
 
-  if (node.hasParam("ik_seed")) {
+  if (node->has_parameter("ik_seed")) {
     std::vector<double> ik_seed;
-    node.getParam("ik_seed", ik_seed);
+    node->get_parameter("ik_seed", ik_seed);
     arm_node.setIKSeed(ik_seed);
   } else {
     RCLCPP_WARN(node->get_logger(), "Param ik_seed not set, arm may exhibit erratic behavior");
@@ -578,14 +611,14 @@ int main(int argc, char ** argv) {
   // We update with a current timestamp so the "setGoal" function
   // is planning from the correct time for a smooth start
 
-  auto t = ros::Time::now();
+  auto t = node->now();
 
   arm->update();
   arm->setGoal(arm::Goal::createFromPosition(home_position));
 
   auto prev_t = t;
   while (rclcpp::ok()) {
-    t = ros::Time::now();
+    t = node->now();
 
     // Update feedback, and command the arm to move along its planned path
     // (this also acts as a loop-rate limiter so no 'sleep' is needed)
@@ -596,9 +629,9 @@ int main(int argc, char ** argv) {
 
     arm_node.publishState();
 
-    // If a simulator reset has occured, go back to the home position.
+    // If a simulator reset has occurred, go back to the home position.
     if (t < prev_t) {
-      std::cout << "Returning to home pose after simulation reset" << std::endl;
+      RCLCPP_INFO(node->get_logger(), "Returning to home pose after simulation reset");
       arm->setGoal(arm::Goal::createFromPosition(home_position));
     }
     prev_t = t;

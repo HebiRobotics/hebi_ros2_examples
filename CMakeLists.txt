@@ -13,6 +13,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(Eigen3)
 find_package(rclcpp REQUIRED)
+find_package(rclcpp_action REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(trajectory_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
@@ -24,20 +25,21 @@ find_package(hebi_msgs REQUIRED)
 # find_package(control_msgs REQUIRED)
 # find_package(nav_msgs REQUIRED)
 
-# add_executable(arm_node src/kits/arm/arm_node.cpp)
-# ament_target_dependencies(arm_node
-#   rclcpp
-#   geometry_msgs
-#   trajectory_msgs
-#   sensor_msgs
-#   std_srvs
-#   hebi_cpp_api
-#   hebi_msgs
-# )
+add_executable(arm_node src/kits/arm/arm_node.cpp)
+ament_target_dependencies(arm_node
+  rclcpp
+  rclcpp_action
+  geometry_msgs
+  trajectory_msgs
+  sensor_msgs
+  std_srvs
+  hebi_cpp_api
+  hebi_msgs
+)
 
-# install(TARGETS
-#   arm_node
-#   DESTINATION lib/${PROJECT_NAME})
+install(TARGETS
+  arm_node
+  DESTINATION lib/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)

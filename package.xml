@@ -14,6 +14,7 @@
   <build_depend>eigen</build_depend>
 
   <depend>rclcpp</depend>
+  <depend>rclcpp_action</depend>
   <depend>hebi_cpp_api</depend>
   <depend>hebi_msgs</depend>
   <depend>tf</depend>
