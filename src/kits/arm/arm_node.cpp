@@ -25,22 +25,44 @@ namespace ros {
 
 class ArmNode : public rclcpp::Node {
 public:
-  ArmNode(arm::Arm& arm, const Eigen::VectorXd& home_position, std::vector<std::string> link_names)
-    : Node("arm_node"),
-      arm_(arm),
-      home_position_(home_position),
-      offset_target_subscriber_(create_subscription<geometry_msgs::msg::Point>("offset_target", 50, std::bind(&ArmNode::offsetTargetCallback, this, std::placeholders::_1))),
-      set_target_subscriber_(create_subscription<geometry_msgs::msg::Point>("set_target", 50, std::bind(&ArmNode::setTargetCallback, this, std::placeholders::_1))),
-      cartesian_waypoint_subscriber_(create_subscription<hebi_msgs::msg::TargetWaypoints>("cartesian_waypoints", 50, std::bind(&ArmNode::cartesianWaypointsCallback, this, std::placeholders::_1))),
-      joint_waypoint_subscriber_(create_subscription<trajectory_msgs::msg::JointTrajectory>("joint_waypoints", 50, std::bind(&ArmNode::jointWaypointsCallback, this, std::placeholders::_1))),
-      arm_state_pub_(create_publisher<sensor_msgs::msg::JointState>("joint_states", 50)),
-      center_of_mass_publisher_(create_publisher<geometry_msgs::msg::Inertia>("inertia", 100)),
-      compliant_mode_service_(create_service<std_srvs::srv::SetBool>("compliance_mode", std::bind(&ArmNode::setCompliantMode, this, std::placeholders::_1, std::placeholders::_2))),
-      ik_seed_service_(create_service<hebi_msgs::srv::SetIKSeed>("set_ik_seed", std::bind(&ArmNode::handleIKSeedService, this, std::placeholders::_1, std::placeholders::_2))) {
+  ArmNode() : Node("arm_node") {
 
-    //TODO: Figure out a way to get link names from the arm, so it doesn't need to be input separately
-    this->state_msg_.name = link_names;
+    this->declare_parameter("names", std::vector<std::string>({}));
+    this->declare_parameter("families", std::vector<std::string>({}));
+    this->declare_parameter("gains_package", "");
+    this->declare_parameter("gains_file", "");
+    this->declare_parameter("hrdf_package", "");
+    this->declare_parameter("hrdf_file", "");
+    this->declare_parameter("home_position", std::vector<double>({}));
+    this->declare_parameter("moveit_joints", std::vector<std::string>({}));
+    this->declare_parameter("ik_seed", std::vector<double>({}));
 
+    if (!this->initializeArm()) {
+      throw std::runtime_error("Aborting!");
+    }
+
+    if (this->has_parameter("ik_seed")) {
+      std::vector<double> ik_seed;
+      this->get_parameter("ik_seed", ik_seed);
+      this->setIKSeed(ik_seed);
+    } else {
+      RCLCPP_WARN(this->get_logger(), "Param ik_seed not set, arm may exhibit erratic behavior");
+    }
+
+    // Subscribers
+    offset_target_subscriber_ = this->create_subscription<geometry_msgs::msg::Point>("offset_target", 50, std::bind(&ArmNode::offsetTargetCallback, this, std::placeholders::_1));
+    set_target_subscriber_ = this->create_subscription<geometry_msgs::msg::Point>("set_target", 50, std::bind(&ArmNode::setTargetCallback, this, std::placeholders::_1));
+    joint_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("joint_waypoints", 50, std::bind(&ArmNode::jointWaypointsCallback, this, std::placeholders::_1));
+    cartesian_waypoint_subscriber_ = this->create_subscription<hebi_msgs::msg::TargetWaypoints>("cartesian_waypoints", 50, std::bind(&ArmNode::cartesianWaypointsCallback, this, std::placeholders::_1));
+
+    // Publishers
+    arm_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("joint_states", 50);
+    center_of_mass_publisher_ = this->create_publisher<geometry_msgs::msg::Inertia>("inertia", 100);
+
+    // Services
+    compliant_mode_service_ = this->create_service<std_srvs::srv::SetBool>("compliance_mode", std::bind(&ArmNode::setCompliantMode, this, std::placeholders::_1, std::placeholders::_2));
+    ik_seed_service_ = this->create_service<hebi_msgs::srv::SetIKSeed>("set_ik_seed", std::bind(&ArmNode::handleIKSeedService, this, std::placeholders::_1, std::placeholders::_2));
+    
     // start the action server
     // this->action_server_ = rclcpp_action::create_server<hebi_msgs::action::ArmMotion>(
     //   this,
@@ -58,7 +80,7 @@ public:
     // if (action_server_->is_available())
     //   action_server_->set_aborted(action_server_->get_current_goal_handle());
     
-    auto num_joints = arm_.size();
+    auto num_joints = arm_->size();
     auto num_waypoints = joint_trajectory->points.size();
     Eigen::MatrixXd pos(num_joints, num_waypoints);
     Eigen::MatrixXd vel(num_joints, num_waypoints);
@@ -140,7 +162,7 @@ public:
 
     // Initialize target from feedback as necessary
     if (!isTargetInitialized()) {
-      auto pos = arm_.FK(arm_.lastFeedback().getPositionCommand());
+      auto pos = arm_->FK(arm_->lastFeedback().getPositionCommand());
       target_xyz_.x() = pos.x();
       target_xyz_.y() = pos.y();
       target_xyz_.z() = pos.z();
@@ -178,14 +200,14 @@ public:
     if (req->data) {
       // Go into a passive mode so the system can be moved by hand
       res->message = "Pausing active command (entering grav comp mode)";
-      arm_.cancelGoal();
+      arm_->cancelGoal();
       res->success = true;
     } else {
       res->message = "Resuming active command";
       // auto t = rclcpp::Node::now().seconds();
-      auto last_position = arm_.lastFeedback().getPosition();
-      arm_.setGoal(arm::Goal::createFromPosition(last_position));
-      target_xyz_ = arm_.FK(last_position);
+      auto last_position = arm_->lastFeedback().getPosition();
+      arm_->setGoal(arm::Goal::createFromPosition(last_position));
+      target_xyz_ = arm_->FK(last_position);
       res->success = true;
     }
     return true;
@@ -216,7 +238,7 @@ public:
   // void startArmMotion(const std::shared_ptr<rclcpp_action::ServerGoalHandle<hebi_msgs::action::ArmMotion>> goal_handle) {
   //   RCLCPP_INFO(this->get_logger(), "Executing arm motion action");
     
-  //   auto last_position = arm_.lastFeedback().getPosition();
+  //   auto last_position = arm_->lastFeedback().getPosition();
 
   //   const auto goal = goal_handle->get_goal();
   //   auto feedback
@@ -268,7 +290,7 @@ public:
 
   //   auto feedback = std::make_shared<hebi_msgs::action::ArmMotion::Feedback>();
 
-  //   while (!arm_.atGoal()) {
+  //   while (!arm_->atGoal()) {
   //     // check if there is a cancel request
   //     if (goal_handle->is_canceling()) {
   //       RCLCPP_INFO(this->get_logger(), "Arm motion was cancelled");
@@ -279,7 +301,7 @@ public:
   //     // auto t = rclcpp::Node::now().seconds();
 
   //     // Update and publish progress in feedback
-  //     feedback->percent_complete = arm_.goalProgress() * 100.0;
+  //     feedback->percent_complete = arm_->goalProgress() * 100.0;
   //     goal_handle->publish_feedback(feedback);
 
   //     // Limit feedback rate
@@ -296,14 +318,14 @@ public:
   //////////////////////// OTHER UTILITY FUNCTIONS ////////////////////////
 
   void setColor(const Color& color) {
-    auto& command = arm_.pendingCommand();
+    auto& command = arm_->pendingCommand();
     for (int i = 0; i < command.size(); ++i) {
       command[i].led().set(color);
     }
   }
 
   void publishState() {
-    auto& fdbk = arm_.lastFeedback();
+    auto& fdbk = arm_->lastFeedback();
 
     // how is there not a better way to do this?
 
@@ -324,7 +346,7 @@ public:
     arm_state_pub_->publish(state_msg_);
 
     // compute arm CoM
-    auto& model = arm_.robotModel();
+    auto& model = arm_->robotModel();
     Eigen::VectorXd masses;
     robot_model::Matrix4dVector frames;
     model.getMasses(masses);
@@ -348,8 +370,20 @@ public:
     center_of_mass_publisher_->publish(center_of_mass_message_);
   }
   
+  void setGoal() {
+    this->arm_->setGoal(arm::Goal::createFromPosition(this->home_position_));
+  }
+
+  bool update() {
+    return this->arm_->update();
+  }
+
+  bool send() {
+    return this->arm_->send();
+  }
+
 private:
-  arm::Arm& arm_;
+  std::unique_ptr<arm::Arm> arm_;
 
   // The end effector location that this arm will target (NaN indicates
   // unitialized state, and will be set from feedback during first
@@ -391,7 +425,7 @@ private:
     // Data sanity check:
     if (angles.rows() != velocities.rows()       || // Number of joints
         angles.rows() != accelerations.rows()    ||
-        angles.rows() != arm_.size() ||
+        angles.rows() != arm_->size() ||
         angles.cols() != velocities.cols()       || // Number of waypoints
         angles.cols() != accelerations.cols()    ||
         angles.cols() != times.size()            ||
@@ -401,10 +435,10 @@ private:
     }
 
     // Update stored target position, based on final joint angles.
-    target_xyz_ = arm_.FK(angles.rightCols<1>());
+    target_xyz_ = arm_->FK(angles.rightCols<1>());
 
     // Replan:
-    arm_.setGoal(arm::Goal::createFromWaypoints(times, angles, velocities, accelerations));
+    arm_->setGoal(arm::Goal::createFromWaypoints(times, angles, velocities, accelerations));
   }
 
   // Helper function to condense functionality between various message/action callbacks above
@@ -421,11 +455,11 @@ private:
 
     // These are the joint angles that will be added
     auto num_waypoints = xyz_positions.cols();
-    Eigen::MatrixXd positions(arm_.size(), num_waypoints);
+    Eigen::MatrixXd positions(arm_->size(), num_waypoints);
 
     // Plan to each subsequent point from the last position
     // (We use the last position command for smoother motion)
-    Eigen::VectorXd last_position = arm_.lastFeedback().getPositionCommand();
+    Eigen::VectorXd last_position = arm_->lastFeedback().getPositionCommand();
 
     if(use_ik_seed_) {
       last_position = ik_seed_;
@@ -436,9 +470,9 @@ private:
     if (end_tip_directions) {
       // If we are given tip directions, add these too...
       for (size_t i = 0; i < num_waypoints; ++i) {
-        last_position = arm_.solveIK(last_position, xyz_positions.col(i), static_cast<Eigen::Vector3d>(end_tip_directions->col(i)));
+        last_position = arm_->solveIK(last_position, xyz_positions.col(i), static_cast<Eigen::Vector3d>(end_tip_directions->col(i)));
 
-        auto fk_check = arm_.FK(last_position);
+        auto fk_check = arm_->FK(last_position);
         auto mag_diff = (last_position - fk_check).norm();
         if (mag_diff > 0.01) {
           RCLCPP_WARN_STREAM(this->get_logger(), "Target Pose: "
@@ -462,13 +496,130 @@ private:
       }
     } else {
       for (size_t i = 0; i < num_waypoints; ++i) {
-        last_position = arm_.solveIK(last_position, xyz_positions.col(i));
+        last_position = arm_->solveIK(last_position, xyz_positions.col(i));
         positions.col(i) = last_position;
       }
     }
 
     // Replan:
-    arm_.setGoal(arm::Goal::createFromPositions(positions));
+    arm_->setGoal(arm::Goal::createFromPositions(positions));
+  }
+
+  /////////////////// Initialize arm ///////////////////
+  bool initializeArm() {
+
+    // Get parameters for name/family of modules; default to standard values:
+    std::vector<std::string> families;
+    if (this->has_parameter("families")) {
+      this->get_parameter("families", families);
+      RCLCPP_INFO(this->get_logger(), "Found and successfully read 'families' parameter");
+    } else {
+      RCLCPP_WARN(this->get_logger(), "Could not find/read 'families' parameter; defaulting to 'HEBI'");
+      families = {"HEBI"};
+    }
+
+    std::vector<std::string> names;
+    // Read the package + path for the gains file
+    std::string gains_package;
+    std::string gains_file;
+    // Read the package + path for the hrdf file
+    std::string hrdf_package;
+    std::string hrdf_file;
+
+    bool success = true;
+    success = success && this->loadParam("names", names);
+    success = success && this->loadParam("gains_package", gains_package);
+    success = success && this->loadParam("gains_file", gains_file);
+    success = success && this->loadParam("hrdf_package", hrdf_package);
+    success = success && this->loadParam("hrdf_file", hrdf_file);
+
+    if(!success) {
+      RCLCPP_ERROR(this->get_logger(), "ABORTING!");
+      return false;
+    }
+
+    // Create arm
+    arm::Arm::Params params;
+    params.families_ = families;
+    params.names_ = names;
+    // params.get_current_time_s_ = []() {
+    //   static double start_time = this->now().seconds();
+    //   return this->now().seconds() - start_time;
+    // };
+
+    params.hrdf_file_ = ament_index_cpp::get_package_share_directory(hrdf_package) + std::string("/") + hrdf_file;
+
+    for (int num_tries = 0; num_tries < 3; num_tries++) {
+      this->arm_ = arm::Arm::create(params);
+      if (this->arm_) {
+        break;
+      }
+      RCLCPP_WARN(this->get_logger(), "Could not initialize arm, trying again...");
+      rclcpp::sleep_for(std::chrono::seconds(1));
+    }
+
+    if (!this->arm_) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Failed to find the following modules in family: " << families.at(0));
+      for(auto it = names.begin(); it != names.end(); ++it) {
+          RCLCPP_ERROR_STREAM(this->get_logger(), "> " << *it);
+      }
+      RCLCPP_ERROR(this->get_logger(), "Could not initialize arm! Check for modules on the network, and ensure good connection (e.g., check packet loss plot in Scope). Shutting down...");
+      return false;
+    } else  {
+      RCLCPP_INFO(this->get_logger(), "Arm initialized!");
+    }
+
+    // Load the appropriate gains file
+    if (!this->arm_->loadGains(ament_index_cpp::get_package_share_directory(gains_package) + std::string("/") + gains_file)) {
+      RCLCPP_ERROR(this->get_logger(), "Could not load gains file and/or set arm gains. Attempting to continue.");
+    } else {
+      RCLCPP_INFO(this->get_logger(), "Gains file loaded");
+    }
+
+    // Get the "home" position for the arm
+    std::vector<double> home_position_vector;
+    if (this->has_parameter("home_position")) {
+      this->get_parameter("home_position", home_position_vector);
+      RCLCPP_INFO(this->get_logger(), "Found and successfully read 'home_position' parameter");
+    } else {
+      RCLCPP_WARN(this->get_logger(), "Could not find/read 'home_position' parameter; defaulting to all zeros!");
+    }
+    this->home_position_ = Eigen::VectorXd(this->arm_->size());
+    if (home_position_vector.empty()) {
+      for (size_t i = 0; i < this->home_position_.size(); ++i) {
+        this->home_position_[i] = 0.01; // Avoid common singularities by being slightly off from zero
+      }
+    } else if (home_position_vector.size() != this->arm_->size()) {
+      RCLCPP_ERROR(this->get_logger(), "'home_position' parameter not the same length as HRDF file's number of DoF! Aborting!");
+      return false;
+    } else {
+      for (size_t i = 0; i < this->home_position_.size(); ++i) {
+        this->home_position_[i] = home_position_vector[i];
+      }
+    }
+
+    // Make a list of family/actuator formatted names for the JointState publisher
+    std::vector<std::string> full_names;
+    for (size_t idx=0; idx<names.size(); ++idx) {
+      full_names.push_back(families.at(0) + "/" + names.at(idx));
+    }
+    // TODO: Figure out a way to get link names from the arm, so it doesn't need to be input separately
+    state_msg_.name = full_names;
+
+    return true;
+  }
+
+  template <typename T>
+  bool loadParam(std::string varname, T& var) {
+    if (this->has_parameter(varname)) {
+      if (this->get_parameter(varname, var)) {
+        RCLCPP_INFO_STREAM(this->get_logger(), "Found and successfully read '" << varname << "' parameter");
+        return true;
+      }
+    }
+
+    RCLCPP_ERROR_STREAM(this->get_logger(), "Could not find/read required '" << varname << "' parameter!");
+    return false;
   }
  
 };
@@ -476,168 +627,50 @@ private:
 } // namespace ros
 } // namespace hebi
 
-template <typename T>
-bool loadParam(rclcpp::Node::SharedPtr node, std::string varname, T& var) {
-  if (node->has_parameter(varname)) {
-    if (node->get_parameter(varname, var)) {
-      RCLCPP_INFO_STREAM(node->get_logger(), "Found and successfully read '" << varname << "' parameter");
-      return true;
-    }
-  }
-
-  RCLCPP_ERROR_STREAM(node->get_logger(), "Could not find/read required '" << varname << "' parameter!");
-  return false;
-}
-
 int main(int argc, char ** argv) {
 
-  // Initialize ROS node
+  // Initialize ROS
   rclcpp::init(argc, argv);
-  auto node = rclcpp::Node::make_shared("arm_node");
 
-  /////////////////// Load parameters ///////////////////
+  try {
+    auto node = std::make_shared<hebi::ros::ArmNode>();
 
-  // Get parameters for name/family of modules; default to standard values:
-  std::vector<std::string> families;
-  if (node->has_parameter("families")) {
-    node->get_parameter("families", families);
-    RCLCPP_INFO(node->get_logger(), "Found and successfully read 'families' parameter");
-  } else {
-    RCLCPP_WARN(node->get_logger(), "Could not find/read 'families' parameter; defaulting to 'HEBI'");
-    families = {"HEBI"};
-  }
+    /////////////////// Main Loop ///////////////////
 
-  std::vector<std::string> names;
-  // Read the package + path for the gains file
-  std::string gains_package;
-  std::string gains_file;
-  // Read the package + path for the hrdf file
-  std::string hrdf_package;
-  std::string hrdf_file;
+    // We update with a current timestamp so the "setGoal" function
+    // is planning from the correct time for a smooth start
 
-  bool success = true;
-  success = success && loadParam(node, "names", names);
-  success = success && loadParam(node, "gains_package", gains_package);
-  success = success && loadParam(node, "gains_file", gains_file);
-  success = success && loadParam(node, "hrdf_package", hrdf_package);
-  success = success && loadParam(node, "hrdf_file", hrdf_file);
+    auto t = node->now();
 
-  if(!success) {
-    RCLCPP_ERROR(node->get_logger(), "Could not find one or more required parameters; aborting!");
+    node->update();
+    node->setGoal();
+
+    auto prev_t = t;
+    while (rclcpp::ok()) {
+      t = node->now();
+
+      // Update feedback, and command the arm to move along its planned path
+      // (this also acts as a loop-rate limiter so no 'sleep' is needed)
+      if (!node->update())
+        RCLCPP_WARN(node->get_logger(), "Error Getting Feedback -- Check Connection");
+      else if (!node->send())
+        RCLCPP_WARN(node->get_logger(), "Error Sending Commands -- Check Connection");
+
+      node->publishState();
+
+      // If a simulator reset has occurred, go back to the home position.
+      if (t < prev_t) {
+        RCLCPP_INFO(node->get_logger(), "Returning to home pose after simulation reset");
+        node->setGoal();
+      }
+      prev_t = t;
+
+      // Call any pending callbacks (note -- this may update our planned motion)
+      rclcpp::spin_some(node);
+    }
+  } catch (const std::exception &e) {
+    RCLCPP_ERROR(rclcpp::get_logger("arm_node"), "Caught runtime error: %s", e.what());
     return -1;
-  }
-
-  // Get the "home" position for the arm
-  std::vector<double> home_position_vector;
-  if (node->has_parameter("home_position")) {
-    node->get_parameter("home_position", home_position_vector);
-    RCLCPP_INFO(node->get_logger(), "Found and successfully read 'home_position' parameter");
-  } else {
-    RCLCPP_WARN(node->get_logger(), "Could not find/read 'home_position' parameter; defaulting to all zeros!");
-  }
-
-  /////////////////// Initialize arm ///////////////////
-
-  // Create arm
-  arm::Arm::Params params;
-  params.families_ = families;
-  params.names_ = names;
-  params.get_current_time_s_ = [node]() {
-    static double start_time = node->now().seconds();
-    return node->now().seconds() - start_time;
-  };
-
-  params.hrdf_file_ = ament_index_cpp::get_package_share_directory(hrdf_package) + std::string("/") + hrdf_file;
-
-  auto arm = arm::Arm::create(params);
-  for (int num_tries = 0; num_tries < 3; num_tries++) {
-    arm = arm::Arm::create(params);
-    if (arm) {
-      break;
-    }
-    RCLCPP_WARN(node->get_logger(), "Could not initialize arm, trying again...");
-    rclcpp::sleep_for(std::chrono::seconds(1));
-  }
-
-  if (!arm) {
-    RCLCPP_ERROR_STREAM(node->get_logger(), "Failed to find the following modules in family: " << families.at(0));
-    for(auto it = names.begin(); it != names.end(); ++it) {
-        RCLCPP_ERROR_STREAM(node->get_logger(), "> " << *it);
-    }
-    RCLCPP_ERROR(node->get_logger(), "Could not initialize arm! Check for modules on the network, and ensure good connection (e.g., check packet loss plot in Scope). Shutting down...");
-    return -1;
-  }
-
-  // Load the appropriate gains file
-  if (!arm->loadGains(ament_index_cpp::get_package_share_directory(gains_package) + std::string("/") + gains_file)) {
-    RCLCPP_ERROR(node->get_logger(), "Could not load gains file and/or set arm gains. Attempting to continue.");
-  }
-
-  // Get the home position, defaulting to (nearly) zero
-  Eigen::VectorXd home_position(arm->size());
-  if (home_position_vector.empty()) {
-    for (size_t i = 0; i < home_position.size(); ++i) {
-      home_position[i] = 0.01; // Avoid common singularities by being slightly off from zero
-    }
-  } else if (home_position_vector.size() != arm->size()) {
-    RCLCPP_ERROR(node->get_logger(), "'home_position' parameter not the same length as HRDF file's number of DoF! Aborting!");
-    return -1;
-  } else {
-    for (size_t i = 0; i < home_position.size(); ++i) {
-      home_position[i] = home_position_vector[i];
-    }
-  }
-
-  // Make a list of family/actuator formatted names for the JointState publisher
-  std::vector<std::string> full_names;
-  for (size_t idx=0; idx<names.size(); ++idx) {
-    full_names.push_back(families.at(0) + "/" + names.at(idx));
-  }
-
-  /////////////////// Initialize ROS interface ///////////////////
-
-  hebi::ros::ArmNode arm_node(*arm, home_position, full_names);
-
-  if (node->has_parameter("ik_seed")) {
-    std::vector<double> ik_seed;
-    node->get_parameter("ik_seed", ik_seed);
-    arm_node.setIKSeed(ik_seed);
-  } else {
-    RCLCPP_WARN(node->get_logger(), "Param ik_seed not set, arm may exhibit erratic behavior");
-  }
-
-  /////////////////// Main Loop ///////////////////
-
-  // We update with a current timestamp so the "setGoal" function
-  // is planning from the correct time for a smooth start
-
-  auto t = node->now();
-
-  arm->update();
-  arm->setGoal(arm::Goal::createFromPosition(home_position));
-
-  auto prev_t = t;
-  while (rclcpp::ok()) {
-    t = node->now();
-
-    // Update feedback, and command the arm to move along its planned path
-    // (this also acts as a loop-rate limiter so no 'sleep' is needed)
-    if (!arm->update())
-      RCLCPP_WARN(node->get_logger(), "Error Getting Feedback -- Check Connection");
-    else if (!arm->send())
-      RCLCPP_WARN(node->get_logger(), "Error Sending Commands -- Check Connection");
-
-    arm_node.publishState();
-
-    // If a simulator reset has occurred, go back to the home position.
-    if (t < prev_t) {
-      RCLCPP_INFO(node->get_logger(), "Returning to home pose after simulation reset");
-      arm->setGoal(arm::Goal::createFromPosition(home_position));
-    }
-    prev_t = t;
-
-    // Call any pending callbacks (note -- this may update our planned motion)
-    rclcpp::spin_some(node);
   }
 
   return 0;

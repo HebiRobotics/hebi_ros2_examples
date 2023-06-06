@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.8)
+cmake_minimum_required(VERSION 3.5)
 project(hebi_ros2_examples)
 
 if(NOT CMAKE_CXX_STANDARD)
@@ -40,6 +40,12 @@ ament_target_dependencies(arm_node
 install(TARGETS
   arm_node
   DESTINATION lib/${PROJECT_NAME})
+
+install(DIRECTORY
+  launch
+  config
+  data
+  DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
