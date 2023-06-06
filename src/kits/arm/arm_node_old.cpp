@@ -25,9 +25,6 @@ namespace ros {
 
 class ArmNode : public rclcpp::Node {
 public:
-  using ArmMotion = hebi_msgs::action::ArmMotion;
-  using GoalHandleArmMotion = rclcpp_action::ServerGoalHandle<ArmMotion>;
-  
   ArmNode() : Node("arm_node") {
 
     this->declare_parameter("names", std::vector<std::string>({}));
@@ -44,158 +41,160 @@ public:
       throw std::runtime_error("Aborting!");
     }
 
+    if (this->has_parameter("ik_seed")) {
+      std::vector<double> ik_seed;
+      this->get_parameter("ik_seed", ik_seed);
+      this->setIKSeed(ik_seed);
+    } else {
+      RCLCPP_WARN(this->get_logger(), "Param ik_seed not set, arm may exhibit erratic behavior");
+    }
+
+    // Subscribers
+    offset_target_subscriber_ = this->create_subscription<geometry_msgs::msg::Point>("offset_target", 50, std::bind(&ArmNode::offsetTargetCallback, this, std::placeholders::_1));
+    set_target_subscriber_ = this->create_subscription<geometry_msgs::msg::Point>("set_target", 50, std::bind(&ArmNode::setTargetCallback, this, std::placeholders::_1));
+    joint_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("joint_waypoints", 50, std::bind(&ArmNode::jointWaypointsCallback, this, std::placeholders::_1));
+    cartesian_waypoint_subscriber_ = this->create_subscription<hebi_msgs::msg::TargetWaypoints>("cartesian_waypoints", 50, std::bind(&ArmNode::cartesianWaypointsCallback, this, std::placeholders::_1));
+
     // Publishers
     arm_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("joint_states", 50);
     center_of_mass_publisher_ = this->create_publisher<geometry_msgs::msg::Inertia>("inertia", 100);
+
+    // Services
+    compliant_mode_service_ = this->create_service<std_srvs::srv::SetBool>("compliance_mode", std::bind(&ArmNode::setCompliantMode, this, std::placeholders::_1, std::placeholders::_2));
+    ik_seed_service_ = this->create_service<hebi_msgs::srv::SetIKSeed>("set_ik_seed", std::bind(&ArmNode::handleIKSeedService, this, std::placeholders::_1, std::placeholders::_2));
     
-    // start the action server
-    this->action_server_ = rclcpp_action::create_server<ArmMotion>(
-      this,
-      "arm_motion",
-      std::bind(&ArmNode::handleArmMotionGoal, this, std::placeholders::_1, std::placeholders::_2),
-      std::bind(&ArmNode::handleArmMotionCancel, this, std::placeholders::_1),
-      std::bind(&ArmNode::handleArmMotionAccepted, this, std::placeholders::_1));
   }
 
-  //////////////////////// ACTION HANDLER FUNCTIONS ////////////////////////
+  //////////////////////// SUBSCRIBER CALLBACK FUNCTIONS ////////////////////////
 
-  rclcpp_action::GoalResponse handleArmMotionGoal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const ArmMotion::Goal> goal) {
-    RCLCPP_INFO(this->get_logger(), "Received arm motion action request");
-    (void)uuid;
-    if (goal->wp_type != "cartesian" && goal->wp_type != "joint") {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - invalid waypoint type, should be 'cartesian' or 'joint'");
-      return rclcpp_action::GoalResponse::REJECT;
-    }
-    if (goal->waypoints.points.empty()) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - no waypoints specified");
-      return rclcpp_action::GoalResponse::REJECT;
-    }
-    return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
-  }
-
-  rclcpp_action::CancelResponse handleArmMotionCancel(const std::shared_ptr<GoalHandleArmMotion> goal_handle) {
-    RCLCPP_INFO(this->get_logger(), "Received request to cancel arm motion action");
-    (void)goal_handle;
-    return rclcpp_action::CancelResponse::ACCEPT;
-  }
-
-  void handleArmMotionAccepted(const std::shared_ptr<GoalHandleArmMotion> goal_handle) {
-    // this needs to return quickly to avoid blocking the executor
-    // spin up a new thread to execute the action
-    std::thread{std::bind(&ArmNode::startArmMotion, this, std::placeholders::_1), goal_handle}.detach();
-  }
-
-  void startArmMotion(const std::shared_ptr<GoalHandleArmMotion> goal_handle) {
-    RCLCPP_INFO(this->get_logger(), "Executing arm motion action");
+  // Callback for trajectories with joint angle waypoints
+  void jointWaypointsCallback(const trajectory_msgs::msg::JointTrajectory::SharedPtr joint_trajectory) {
     
-    // Wait until the action is complete, sending status/feedback along the way.
-    rclcpp::Rate r(10);
+    auto num_joints = arm_->size();
+    auto num_waypoints = joint_trajectory->points.size();
+    Eigen::MatrixXd pos(num_joints, num_waypoints);
+    Eigen::MatrixXd vel(num_joints, num_waypoints);
+    Eigen::MatrixXd accel(num_joints, num_waypoints);
+    Eigen::VectorXd times(num_waypoints);
 
-    const auto goal = goal_handle->get_goal();
-    auto feedback = std::make_shared<ArmMotion::Feedback>();
-    auto result = std::make_shared<ArmMotion::Result>();
+    for (size_t waypoint = 0; waypoint < num_waypoints; ++waypoint) {
+      auto& cmd_waypoint = joint_trajectory->points[waypoint];
 
-    // Replan a smooth joint trajectory from the current location through a
-    // series of cartesian waypoints.
-    // TODO: use a single struct instead of 6 single vectors of the same length;
-    // but how do we do hierarchial actions?
-    auto num_waypoints = goal->waypoints.points.size();
-
-    Eigen::VectorXd wp_times(num_waypoints);
-    bool use_times = goal->use_wp_times;
-
-    std::string waypoint_type = goal->wp_type;
-
-    if (waypoint_type == "cartesian") {
-      // Get each waypoint in cartesian space
-      Eigen::Matrix3Xd xyz_positions(3, num_waypoints);
-      Eigen::Matrix3Xd orientation(3, num_waypoints);
-      for (size_t i = 0; i < num_waypoints; ++i) {
-        if (use_times) {
-          wp_times(i) = goal->waypoints.points[i].time_from_start.sec + goal->waypoints.points[i].time_from_start.nanosec * 1e-9;
-        }
-        xyz_positions(0, i) = goal->waypoints.points[i].positions[0];
-        xyz_positions(1, i) = goal->waypoints.points[i].positions[1];
-        xyz_positions(2, i) = goal->waypoints.points[i].positions[2];
-        orientation(0, i) = goal->waypoints.points[i].positions[3];
-        orientation(1, i) = goal->waypoints.points[i].positions[4];
-        orientation(2, i) = goal->waypoints.points[i].positions[5];
-      }
-
-      updateCartesianWaypoints(use_times, wp_times, xyz_positions, &orientation);
-    } else if (waypoint_type == "joint") {
-      // Get each waypoint in joint space
-      auto num_joints = this->arm_->size();
-      Eigen::MatrixXd pos(num_joints, num_waypoints);
-      Eigen::MatrixXd vel(num_joints, num_waypoints);
-      Eigen::MatrixXd accel(num_joints, num_waypoints);
-
-      for (size_t i = 0; i < num_waypoints; ++i) {
-        if (use_times) {
-          wp_times(i) = goal->waypoints.points[i].time_from_start.sec + goal->waypoints.points[i].time_from_start.nanosec * 1e-9;
-        }
-        
-        if (goal->waypoints.points[i].positions.size() != num_joints ||
-            goal->waypoints.points[i].velocities.size() != num_joints ||
-            goal->waypoints.points[i].accelerations.size() != num_joints) {
-          RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - Position, velocity, and acceleration sizes not correct for waypoint index");
-          result->success = false;
-          goal_handle->abort(result);
-          return;
-        }
-
-        for (size_t j = 0; j < num_joints; ++j) {
-          pos(j, i) = goal->waypoints.points[i].positions[j];
-          vel(j, i) = goal->waypoints.points[i].velocities[j];
-          accel(j, i) = goal->waypoints.points[i].accelerations[j];
-        }
-      }
-
-      updateJointWaypoints(use_times, wp_times, pos, vel, accel);
-    }
-
-    // Set LEDs to a particular color, or clear them.
-    Color color;
-    if (goal->set_color)
-      color = Color(goal->r, goal->g, goal->b, 255);
-    setColor(color);
-
-    while (!arm_->atGoal() && rclcpp::ok()) {
-      // check if there is a cancel request
-      if (goal_handle->is_canceling()) {
-        result->success = false;
-        goal_handle->canceled(result);
-        setColor({0, 0, 0, 0});
-        RCLCPP_INFO(this->get_logger(), "Arm motion was cancelled");
+      if (cmd_waypoint.positions.size() != num_joints ||
+          cmd_waypoint.velocities.size() != num_joints ||
+          cmd_waypoint.accelerations.size() != num_joints) {
+        RCLCPP_ERROR_STREAM(this->get_logger(), "Position, velocity, and acceleration sizes not correct for waypoint index " << waypoint);
         return;
       }
 
-      // Update and publish progress in feedback
-      feedback->percent_complete = arm_->goalProgress() * 100.0;
-      goal_handle->publish_feedback(feedback);      
+      if (!cmd_waypoint.effort.empty()) {
+        RCLCPP_WARN_STREAM(this->get_logger(), "Effort commands in trajectories not supported; ignoring");
+      }
 
-      // Limit feedback rate
-      r.sleep();
+      for (size_t joint = 0; joint < num_joints; ++joint) {
+        pos(joint, waypoint) = cmd_waypoint.positions[joint];
+        vel(joint, waypoint) = cmd_waypoint.velocities[joint];
+        accel(joint, waypoint) = cmd_waypoint.accelerations[joint];
+      }
+
+      times(waypoint) = cmd_waypoint.time_from_start.sec;
+    }
+    updateJointWaypoints(pos, vel, accel, times);
+  }
+
+  // Callback for trajectories with cartesian position waypoints
+  void cartesianWaypointsCallback(const hebi_msgs::msg::TargetWaypoints::SharedPtr target_waypoints) {
+
+    // Fill in an Eigen::Matrix3xd with the xyz goal
+    size_t num_waypoints = target_waypoints->waypoints_vector.size();
+    Eigen::Matrix3Xd xyz_waypoints(3, num_waypoints);
+    for (size_t i = 0; i < num_waypoints; ++i) {
+      const auto& xyz_waypoint = target_waypoints->waypoints_vector[i];
+      xyz_waypoints(0, i) = xyz_waypoint.x;
+      xyz_waypoints(1, i) = xyz_waypoint.y;
+      xyz_waypoints(2, i) = xyz_waypoint.z;
     }
 
-    // Publish when the arm is done with a motion
-    if (rclcpp::ok()) {
-      result->success = true;
-      goal_handle->succeed(result);
-      RCLCPP_INFO(this->get_logger(), "Completed arm motion action");
-      setColor({0, 0, 0, 0});
+    // Replan
+    updateCartesianWaypoints(xyz_waypoints);
+  }
+
+  // Set the target end effector location in (x,y,z) space, replanning
+  // smoothly to the new location
+  void setTargetCallback(const geometry_msgs::msg::Point::SharedPtr data) {
+
+    // Fill in an Eigen::Matrix3Xd with the xyz goal
+    Eigen::Matrix3Xd xyz_waypoints(3, 1);
+    xyz_waypoints(0, 0) = data->x;
+    xyz_waypoints(1, 0) = data->y;
+    xyz_waypoints(2, 0) = data->z;
+
+    // Replan
+    updateCartesianWaypoints(xyz_waypoints);
+  }
+
+  // "Jog" the target end effector location in (x,y,z) space, replanning
+  // smoothly to the new location
+  void offsetTargetCallback(const geometry_msgs::msg::Point::SharedPtr data) {
+
+    // Only update if target changes!
+    if (data->x == 0 && data->y == 0 && data->z == 0)
+      return;
+
+    // Initialize target from feedback as necessary
+    if (!isTargetInitialized()) {
+      auto pos = arm_->FK(arm_->lastFeedback().getPositionCommand());
+      target_xyz_.x() = pos.x();
+      target_xyz_.y() = pos.y();
+      target_xyz_.z() = pos.z();
     }
 
+    // Fill in an Eigen::Matrix3Xd with the xyz goal
+    Eigen::Matrix3Xd xyz_waypoints(3, 1);
+    xyz_waypoints(0, 0) = target_xyz_.x() + data->x;
+    xyz_waypoints(1, 0) = target_xyz_.y() + data->y;
+    xyz_waypoints(2, 0) = target_xyz_.z() + data->z;
+
+    // Replan
+    updateCartesianWaypoints(xyz_waypoints);
+  }
+
+  //////////////////////// SERVICE HANDLER FUNCTIONS ////////////////////////
+  bool setIKSeed(const std::vector<double>& ik_seed) {
+    if(ik_seed.size() != home_position_.size()) {
+      use_ik_seed_ = false;
+    } else {
+      use_ik_seed_ = true;
+      ik_seed_.resize(ik_seed.size());
+      for (size_t i = 0; i < ik_seed.size(); ++i) {
+        ik_seed_[i] = ik_seed[i];
+      }
+    }
+    return use_ik_seed_;
+  }
+
+  bool handleIKSeedService(const std::shared_ptr<hebi_msgs::srv::SetIKSeed::Request> req, std::shared_ptr<hebi_msgs::srv::SetIKSeed::Response> res) {
+    return setIKSeed(req->seed);
+  }
+
+  bool setCompliantMode(const std::shared_ptr<std_srvs::srv::SetBool::Request> req, std::shared_ptr<std_srvs::srv::SetBool::Response> res) {
+    if (req->data) {
+      // Go into a passive mode so the system can be moved by hand
+      res->message = "Pausing active command (entering grav comp mode)";
+      arm_->cancelGoal();
+      res->success = true;
+    } else {
+      res->message = "Resuming active command";
+      // auto t = rclcpp::Node::now().seconds();
+      auto last_position = arm_->lastFeedback().getPosition();
+      arm_->setGoal(arm::Goal::createFromPosition(last_position));
+      target_xyz_ = arm_->FK(last_position);
+      res->success = true;
+    }
+    return true;
   }
 
   //////////////////////// OTHER UTILITY FUNCTIONS ////////////////////////
-
-  void setColor(const Color& color) {
-    auto& command = arm_->pendingCommand();
-    for (int i = 0; i < command.size(); ++i) {
-      command[i].led().set(color);
-    }
-  }
 
   void publishState() {
     auto& fdbk = arm_->lastFeedback();
@@ -274,10 +273,18 @@ private:
   sensor_msgs::msg::JointState state_msg_;
   geometry_msgs::msg::Inertia center_of_mass_message_;
 
+  rclcpp::Subscription<geometry_msgs::msg::Point>::SharedPtr offset_target_subscriber_;
+  rclcpp::Subscription<geometry_msgs::msg::Point>::SharedPtr set_target_subscriber_;
+  rclcpp::Subscription<hebi_msgs::msg::TargetWaypoints>::SharedPtr cartesian_waypoint_subscriber_;
+  rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr joint_waypoint_subscriber_;
+
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr arm_state_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Inertia>::SharedPtr center_of_mass_publisher_;
 
-  rclcpp_action::Server<hebi_msgs::action::ArmMotion>::SharedPtr action_server_;
+  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr compliant_mode_service_;
+  rclcpp::Service<hebi_msgs::srv::SetIKSeed>::SharedPtr ik_seed_service_;
+  
+  // rclcpp_action::Server<hebi_msgs::action::ArmMotion>::SharedPtr action_server_;
 
   bool isTargetInitialized() {
     return !std::isnan(target_xyz_.x()) ||
@@ -286,7 +293,7 @@ private:
   }
 
   // Each row is a separate joint; each column is a separate waypoint.
-  void updateJointWaypoints(const bool use_times, const Eigen::VectorXd& times, const Eigen::MatrixXd& angles, const Eigen::MatrixXd& velocities, const Eigen::MatrixXd& accelerations) {
+  void updateJointWaypoints(const Eigen::MatrixXd& angles, const Eigen::MatrixXd& velocities, const Eigen::MatrixXd& accelerations, const Eigen::VectorXd& times) {
     // Data sanity check:
     if (angles.rows() != velocities.rows()       || // Number of joints
         angles.rows() != accelerations.rows()    ||
@@ -303,20 +310,16 @@ private:
     target_xyz_ = arm_->FK(angles.rightCols<1>());
 
     // Replan:
-    if (use_times) {
-      arm_->setGoal(arm::Goal::createFromWaypoints(times, angles, velocities, accelerations));
-    } else {
-      arm_->setGoal(arm::Goal::createFromWaypoints(angles, velocities, accelerations));
-    }
+    arm_->setGoal(arm::Goal::createFromWaypoints(times, angles, velocities, accelerations));
   }
-  
+
   // Helper function to condense functionality between various message/action callbacks above
   // Replan a smooth joint trajectory from the current location through a
   // series of cartesian waypoints.
   // xyz positions should be a 3xn vector of target positions
-  void updateCartesianWaypoints(const bool use_times, const Eigen::VectorXd& times, const Eigen::Matrix3Xd& xyz_positions, const Eigen::Matrix3Xd* orientation = nullptr) {
+  void updateCartesianWaypoints(const Eigen::Matrix3Xd& xyz_positions, const Eigen::Matrix3Xd* end_tip_directions = nullptr) {
     // Data sanity check:
-    if (orientation && orientation->cols() != xyz_positions.cols())
+    if (end_tip_directions && end_tip_directions->cols() != xyz_positions.cols())
       return;
 
     // Update stored target position:
@@ -334,40 +337,21 @@ private:
       last_position = ik_seed_;
     }
 
-    auto current_position = arm_->FK(last_position);
-    RCLCPP_INFO_STREAM(this->get_logger(), "Current Pose: "
-                                             << current_position[0] << ", "
-                                             << current_position[1] << ", "
-                                             << current_position[2]);
-
     // For each waypoint, find the joint angles to move to it, starting from the last
     // waypoint, and save into the position vector.
-    if (orientation) {
+    if (end_tip_directions) {
       // If we are given tip directions, add these too...
       for (size_t i = 0; i < num_waypoints; ++i) {
-
-        RCLCPP_WARN_STREAM(this->get_logger(), "Target Pose: "
-                                                     << xyz_positions.col(i)[0] << ", "
-                                                     << xyz_positions.col(i)[1] << ", "
-                                                     << xyz_positions.col(i)[2] << " ; "
-                                                     << orientation->col(i)[0] << ", "
-                                                     << orientation->col(i)[1] << ", "
-                                                     << orientation->col(i)[2]) ;
-
-        // Covert orientation to a 3x3 rotation matrix
-        Eigen::Matrix3d rotation_matrix;
-
-        rotation_matrix = Eigen::AngleAxisd(orientation->col(i)[0], Eigen::Vector3d::UnitX()).matrix()
-                        * Eigen::AngleAxisd(orientation->col(i)[1], Eigen::Vector3d::UnitY()).matrix()
-                        * Eigen::AngleAxisd(orientation->col(i)[2], Eigen::Vector3d::UnitZ()).matrix();
-
-        last_position = arm_->solveIK(last_position, xyz_positions.col(i), rotation_matrix);
+        last_position = arm_->solveIK(last_position, xyz_positions.col(i), static_cast<Eigen::Vector3d>(end_tip_directions->col(i)));
 
         auto fk_check = arm_->FK(last_position);
-        auto mag_diff = (xyz_positions.col(i) - fk_check).norm();
-
+        auto mag_diff = (last_position - fk_check).norm();
         if (mag_diff > 0.01) {
-          RCLCPP_WARN_STREAM(this->get_logger(), "IK Solution: "
+          RCLCPP_WARN_STREAM(this->get_logger(), "Target Pose: "
+                                                     << xyz_positions.col(i)[0] << ", "
+                                                     << xyz_positions.col(i)[1] << ", "
+                                                     << xyz_positions.col(i)[2]);
+          RCLCPP_INFO_STREAM(this->get_logger(), "IK Solution: "
                                                     << last_position[0] << " | "
                                                     << last_position[1] << " | "
                                                     << last_position[2] << " | "
@@ -378,7 +362,7 @@ private:
                                                    << fk_check[0] << ", "
                                                    << fk_check[1] << ", "
                                                    << fk_check[2]);
-          RCLCPP_WARN_STREAM(this->get_logger(), "Distance between target and IK pose: " << mag_diff);
+          RCLCPP_INFO_STREAM(this->get_logger(), "Distance between target and IK pose: " << mag_diff);
         }
         positions.col(i) = last_position;
       }
@@ -390,10 +374,7 @@ private:
     }
 
     // Replan:
-    if (use_times)
-      arm_->setGoal(arm::Goal::createFromPositions(times, positions));
-    else
-      arm_->setGoal(arm::Goal::createFromPositions(positions));
+    arm_->setGoal(arm::Goal::createFromPositions(positions));
   }
 
   /////////////////// Initialize arm ///////////////////

@@ -37,8 +37,17 @@ ament_target_dependencies(arm_node
   hebi_msgs
 )
 
+add_executable(move_arm src/kits/arm/move_arm.cpp)
+ament_target_dependencies(move_arm
+  rclcpp
+  rclcpp_action
+  trajectory_msgs
+  hebi_msgs
+)
+
 install(TARGETS
   arm_node
+  move_arm
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY
