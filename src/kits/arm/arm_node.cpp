@@ -27,6 +27,9 @@ class ArmNode : public rclcpp::Node {
 public:
   using ArmMotion = hebi_msgs::action::ArmMotion;
   using GoalHandleArmMotion = rclcpp_action::ServerGoalHandle<ArmMotion>;
+
+  std::unique_ptr<arm::Arm> arm_;
+  Eigen::VectorXd home_position_;
   
   ArmNode() : Node("arm_node") {
 
@@ -242,21 +245,9 @@ public:
 
     center_of_mass_publisher_->publish(center_of_mass_message_);
   }
-  
-  void setGoal() {
-    this->arm_->setGoal(arm::Goal::createFromPosition(this->home_position_));
-  }
-
-  bool update() {
-    return this->arm_->update();
-  }
-
-  bool send() {
-    return this->arm_->send();
-  }
 
 private:
-  std::unique_ptr<arm::Arm> arm_;
+  
 
   // The end effector location that this arm will target (NaN indicates
   // unitialized state, and will be set from feedback during first
@@ -265,8 +256,6 @@ private:
     std::numeric_limits<double>::quiet_NaN(),
     std::numeric_limits<double>::quiet_NaN(),
     std::numeric_limits<double>::quiet_NaN()};
-
-  Eigen::VectorXd home_position_;
 
   Eigen::VectorXd ik_seed_{0};
   bool use_ik_seed_{false};
@@ -533,8 +522,8 @@ int main(int argc, char ** argv) {
 
     auto t = node->now();
 
-    node->update();
-    node->setGoal();
+    node->arm_->update();
+    node->arm_->setGoal(arm::Goal::createFromPosition(node->home_position_));
 
     auto prev_t = t;
     while (rclcpp::ok()) {
@@ -542,9 +531,9 @@ int main(int argc, char ** argv) {
 
       // Update feedback, and command the arm to move along its planned path
       // (this also acts as a loop-rate limiter so no 'sleep' is needed)
-      if (!node->update())
+      if (!node->arm_->update())
         RCLCPP_WARN(node->get_logger(), "Error Getting Feedback -- Check Connection");
-      else if (!node->send())
+      else if (!node->arm_->send())
         RCLCPP_WARN(node->get_logger(), "Error Sending Commands -- Check Connection");
 
       node->publishState();
@@ -552,7 +541,7 @@ int main(int argc, char ** argv) {
       // If a simulator reset has occurred, go back to the home position.
       if (t < prev_t) {
         RCLCPP_INFO(node->get_logger(), "Returning to home pose after simulation reset");
-        node->setGoal();
+        node->arm_->setGoal(arm::Goal::createFromPosition(node->home_position_));
       }
       prev_t = t;
 

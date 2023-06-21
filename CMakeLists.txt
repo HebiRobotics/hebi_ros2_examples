@@ -20,10 +20,19 @@ find_package(sensor_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(hebi_cpp_api REQUIRED)
 find_package(hebi_msgs REQUIRED)
+
+find_package(moveit_ros_planning_interface REQUIRED)
+find_package(moveit_msgs REQUIRED)
+find_package(moveit_visual_tools REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(tf2_ros REQUIRED)
 # find_package(std_msgs REQUIRED)
 # find_package(action_msgs REQUIRED)
 # find_package(control_msgs REQUIRED)
-# find_package(nav_msgs REQUIRED)
+
+include_directories(
+  include
+)
 
 add_executable(arm_node src/kits/arm/arm_node.cpp)
 ament_target_dependencies(arm_node
@@ -45,16 +54,76 @@ ament_target_dependencies(move_arm
   hebi_msgs
 )
 
+add_executable(moveit_arm src/kits/arm/moveit_example.cpp)
+ament_target_dependencies(moveit_arm
+  rclcpp
+  trajectory_msgs
+  geometry_msgs
+  moveit_msgs
+  moveit_ros_planning_interface
+  moveit_visual_tools
+)
+
+add_executable(omni_base_node src/kits/base/omni_base_node.cpp src/util/omni_base.cpp src/util/odom_publisher.cpp)
+ament_target_dependencies(omni_base_node
+  rclcpp
+  rclcpp_action
+  geometry_msgs
+  nav_msgs
+  trajectory_msgs
+  sensor_msgs
+  std_srvs
+  hebi_cpp_api
+  hebi_msgs
+  tf2_ros
+)
+
+add_executable(mecanum_base_node src/kits/base/mecanum_base_node.cpp src/util/mecanum_base.cpp src/util/odom_publisher.cpp)
+ament_target_dependencies(mecanum_base_node
+  rclcpp
+  rclcpp_action
+  geometry_msgs
+  nav_msgs
+  trajectory_msgs
+  sensor_msgs
+  std_srvs
+  hebi_cpp_api
+  hebi_msgs
+  tf2_ros
+)
+
+add_executable(diff_drive_node src/kits/base/diff_drive_node.cpp src/util/diff_drive.cpp src/util/odom_publisher.cpp)
+ament_target_dependencies(diff_drive_node
+  rclcpp
+  rclcpp_action
+  geometry_msgs
+  nav_msgs
+  trajectory_msgs
+  sensor_msgs
+  std_srvs
+  hebi_cpp_api
+  hebi_msgs
+  tf2_ros
+)
+
 install(TARGETS
   arm_node
   move_arm
+  moveit_arm
+  omni_base_node
+  mecanum_base_node
+  diff_drive_node
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY
   launch
   config
-  data
   DESTINATION share/${PROJECT_NAME})
+
+install(DIRECTORY
+  include
+  DESTINATION include/${PROJECT_NAME}
+)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)

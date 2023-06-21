@@ -1,0 +1,38 @@
+publisher_forward_position_controller:
+  ros__parameters:
+
+    controller_name: "forward_position_controller"
+    wait_sec_between_publish: 5
+
+    goal_names: ["pos1", "pos2", "pos3", "pos4"]
+    pos1: [0.785, 0.785, 0.785, 0.785, 0.785, 0.785]
+    pos2: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    pos3: [-0.785, -0.785, -0.785, -0.785, -0.785, -0.785]
+    pos4: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+
+publisher_joint_trajectory_controller:
+  ros__parameters:
+
+    controller_name: "hebi_arm_controller"
+    wait_sec_between_publish: 4
+    repeat_the_same_goal: 1 # useful to simulate continuous inputs
+
+    goal_time_from_start: 3.0
+    goal_names: ["pos1", "pos2", "pos3", "pos4"]
+    pos1:
+      positions: [0.8, 2.09439, 2.09439, 0.01, 1.5707963, 0.0]
+    pos2:
+      positions: [0.0, 2.09439, 2.09439, 0.01, 1.5707963, 0.8]
+    pos3:
+      positions: [-0.8, 2.09439, 2.09439, 0.01, 1.5707963, 0.0]
+    pos4:
+      positions: [0.0, 2.09439, 2.09439, 0.01, 1.5707963, 0.8]
+
+    joints:
+      - J1_base
+      - J2_shoulder
+      - J3_elbow
+      - J4_wrist1
+      - J5_wrist2
+      - J6_wrist3

@@ -1,3 +1,5 @@
-# Parameters for the module names, gains, hrdf, etc
-names: [ "W1", "W2", "W3" ]
-families: [ "OmniDrive" ]
+omni_base_node:
+  ros__parameters:
+    names: [ "W1", "W2", "W3" ]
+    families: [ "Rosie" ]
+    publish_odom: true
