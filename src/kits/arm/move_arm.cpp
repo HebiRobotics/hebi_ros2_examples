@@ -47,21 +47,22 @@ public:
     trajectory_msgs::msg::JointTrajectoryPoint point;
 
     RCLCPP_INFO(this->get_logger(), "Sending waypoints");
-
-    // point.positions = {0.260433, 0.0213, 0.268255, 0, 0, 0};
-    point.positions = {0.01, 2.09439, 2.09439, 0.01, 1.5707963, 0.01};
+    point.positions = {0.24, -0.2, 0.27, M_PI, M_PI/2, M_PI/2};
+    // point.positions = {0.01, 2.09439, 2.09439, 0.01, 1.5707963, 0.01};
     point.velocities = {0, 0, 0, 0, 0, 0};
     point.accelerations = {0, 0, 0, 0, 0, 0};
     point.time_from_start = rclcpp::Duration::from_seconds(2.0);
     goal_msg.waypoints.points.push_back(point);
     goal_msg.use_wp_times = true;
-    goal_msg.wp_type = "joint";
+    goal_msg.wp_type = "cartesian";
 
-    // point.positions = {0.260433, 0.0, 0.2, 0, 0, 0};
-    // goal_msg.waypoints.points.push_back(point);
-
-    // point.positions = {0.260433, 0.0, 0.1, 0, 0, 0};
-    // goal_msg.waypoints.points.push_back(point);
+    int N = 50;
+    for (int i = 1; i <= N; ++i) 
+    {
+      point.positions = {0.24, -0.2 + i*0.4/N, 0.27, M_PI, M_PI/2, M_PI/2};
+      point.time_from_start = rclcpp::Duration::from_seconds(2 + ((double)i)/((double)N));
+      goal_msg.waypoints.points.push_back(point);
+    }
 
     RCLCPP_INFO(this->get_logger(), "Sending waypoints");
 

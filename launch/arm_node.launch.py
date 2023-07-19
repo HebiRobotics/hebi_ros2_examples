@@ -10,38 +10,32 @@ from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description():
 
+  # Declare arguments
   declared_arguments = []
   declared_arguments.append(
-    DeclareLaunchArgument(
-      "robot_name",
-      description="Name of the robot to be used.",
-    )
+      DeclareLaunchArgument(
+          "hebi_arm",
+          description="Name of the robot to be used.",
+      )
   )
-
+  declared_arguments.append(
+      DeclareLaunchArgument(
+          "prefix",
+          default_value="",
+          description="Prefix for the HEBI Arm name. Usually the argument is not set",
+      )
+  )
   declared_arguments.append(
       DeclareLaunchArgument(
           "description_package",
           default_value="hebi_description",
-          description="Description package with robot URDF/xacro files. Usually the argument \
-      is not set, it enables use of a custom description.",
+          description="Description package of the A-2085-06. Usually the argument is not set, \
+      it enables use of a custom description.",
       )
   )
-  declared_arguments.append(
-      DeclareLaunchArgument(
-          "description_file",
-          default_value="A-2085-06.urdf.xacro",
-          description="URDF/XACRO description file with the robot.",
-      )
-  )
-
-  description_package = LaunchConfiguration("description_package")
-  description_file = LaunchConfiguration("description_file")
   
-  robot_name = LaunchConfiguration("robot_name")
-
-  robot_params = PathJoinSubstitution(
-    [FindPackageShare('hebi_ros2_examples'), 'config', PythonExpression(['"', robot_name, '_params.yaml"'])]
-  )
+  hebi_arm = LaunchConfiguration("hebi_arm")
+  description_package = LaunchConfiguration("description_package")
 
   # Get URDF via xacro
   robot_description_content = Command(
@@ -49,22 +43,21 @@ def generate_launch_description():
           PathJoinSubstitution([FindExecutable(name="xacro")]),
           " ",
           PathJoinSubstitution(
-              [FindPackageShare(description_package), "urdf", "kits", description_file]
+              [FindPackageShare(description_package), "urdf", "kits", PythonExpression(['"', hebi_arm, '.urdf.xacro"'])]
           ),
-          " ",
-          "config_pkg:=",
-          description_package,
-          " ",
+          " "
+          "prefix:=",
+          LaunchConfiguration("prefix"),
       ]
   )
 
   robot_description = {"robot_description": robot_description_content}
 
   rviz_config_file = PathJoinSubstitution(
-      [FindPackageShare(description_package), "rviz", "A-2085-06.rviz"]
+    [FindPackageShare(description_package), "rviz", "hebi_arm.rviz"]
   )
 
-  robot_state_pub_node = Node(
+  robot_state_publisher_node = Node(
       package="robot_state_publisher",
       executable="robot_state_publisher",
       output="both",
@@ -78,6 +71,9 @@ def generate_launch_description():
       arguments=["-d", rviz_config_file],
   )
 
+  robot_params = PathJoinSubstitution(
+    [FindPackageShare('hebi_ros2_examples'), 'config', PythonExpression(['"', hebi_arm, '_params.yaml"'])]
+  )
   arm_node = Node(
     package='hebi_ros2_examples',
     executable='arm_node',
@@ -91,7 +87,7 @@ def generate_launch_description():
   return LaunchDescription(
     declared_arguments +
     [
-      robot_state_pub_node,
+      robot_state_publisher_node,
       rviz_node,
       arm_node
     ]

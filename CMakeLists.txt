@@ -11,8 +11,10 @@ endif()
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
+find_package(ament_cmake_python REQUIRED)
 find_package(Eigen3)
 find_package(rclcpp REQUIRED)
+find_package(rclpy REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(trajectory_msgs REQUIRED)
@@ -26,9 +28,7 @@ find_package(moveit_msgs REQUIRED)
 find_package(moveit_visual_tools REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
-# find_package(std_msgs REQUIRED)
-# find_package(action_msgs REQUIRED)
-# find_package(control_msgs REQUIRED)
+find_package(control_msgs REQUIRED)
 
 include_directories(
   include
@@ -44,6 +44,7 @@ ament_target_dependencies(arm_node
   std_srvs
   hebi_cpp_api
   hebi_msgs
+  control_msgs
 )
 
 add_executable(move_arm src/kits/arm/move_arm.cpp)
@@ -52,6 +53,10 @@ ament_target_dependencies(move_arm
   rclcpp_action
   trajectory_msgs
   hebi_msgs
+  geometry_msgs
+  moveit_msgs
+  moveit_ros_planning_interface
+  moveit_visual_tools
 )
 
 add_executable(moveit_arm src/kits/arm/moveit_example.cpp)
@@ -114,6 +119,14 @@ install(TARGETS
   mecanum_base_node
   diff_drive_node
   DESTINATION lib/${PROJECT_NAME})
+
+# # Python modules
+# ament_python_install_package(${PROJECT_NAME})
+
+# # Install python executables
+# install(PROGRAMS
+#   DESTINATION lib/${PROJECT_NAME}
+# )
 
 install(DIRECTORY
   launch

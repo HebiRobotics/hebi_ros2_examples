@@ -57,6 +57,8 @@ int main(int argc, char** argv)
   node_options.automatically_declare_parameters_from_overrides(true);
   auto move_group_node = rclcpp::Node::make_shared("move_group_interface_tutorial", node_options);
 
+  move_group_node->set_parameter(rclcpp::Parameter("use_sim_time", true));
+
   // We spin up a SingleThreadedExecutor for the current state monitor to get information
   // about the robot's state.
   rclcpp::executors::SingleThreadedExecutor executor;
@@ -180,7 +182,7 @@ int main(int argc, char** argv)
   //
   // To start, we'll create an pointer that references the current robot's state.
   // RobotState is the object that contains all the current position/velocity/acceleration data.
-  std::vector<double> joint_values = {0.0, 2.09, 2.09, 0.0, 1.57, 0.0};
+  std::vector<double> joint_values = {0.0, 2.09, 1.3, 2.25, -1.5707963, 3.14159265359};
   
   bool within_bounds = move_group.setJointValueTarget(joint_values);
   if (!within_bounds)
@@ -295,16 +297,16 @@ int main(int argc, char** argv)
   geometry_msgs::msg::Pose target_pose3;
   target_pose3 = current_pose;
 
-  target_pose3.position.z -= 0.05;
-  waypoints.push_back(target_pose3);  // down
+  // target_pose3.position.z -= 0.05;
+  // waypoints.push_back(target_pose3);  // down
 
   target_pose3.position.y -= 0.15;
   waypoints.push_back(target_pose3);  // right
 
-  target_pose3.position.z += 0.2;
-  target_pose3.position.y += 0.2;
-  target_pose3.position.x += 0.15;
-  waypoints.push_back(target_pose3);  // up and left
+  // target_pose3.position.z += 0.2;
+  // target_pose3.position.y += 0.2;
+  // target_pose3.position.x += 0.15;
+  // waypoints.push_back(target_pose3);  // up and left
 
   // We want the Cartesian path to be interpolated at a resolution of 1 cm
   // which is why we will specify 0.01 as the max step in Cartesian
@@ -332,7 +334,7 @@ int main(int argc, char** argv)
   // // // Pull requests are welcome.
   // // //
   // // // You can execute a trajectory like this.
-  move_group.execute(trajectory);
+  // move_group.execute(trajectory);
 
   // // Adding objects to the environment
   // // ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
