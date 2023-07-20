@@ -120,13 +120,14 @@ install(TARGETS
   diff_drive_node
   DESTINATION lib/${PROJECT_NAME})
 
-# # Python modules
-# ament_python_install_package(${PROJECT_NAME})
+# Python modules
+ament_python_install_package(${PROJECT_NAME})
 
-# # Install python executables
-# install(PROGRAMS
-#   DESTINATION lib/${PROJECT_NAME}
-# )
+# Install python executables
+install(PROGRAMS
+  scripts/mobile_io.py
+  DESTINATION lib/${PROJECT_NAME}
+)
 
 install(DIRECTORY
   launch
