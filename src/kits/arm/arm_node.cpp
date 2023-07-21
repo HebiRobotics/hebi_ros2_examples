@@ -1,13 +1,12 @@
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
-
 #include <ament_index_cpp/get_package_share_directory.hpp>
 
 #include <control_msgs/msg/joint_jog.hpp>
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <geometry_msgs/msg/inertia.hpp>
-
+#include <geometry_msgs/msg/pose_stamped.hpp>
 #include <hebi_msgs/action/arm_motion.hpp>
 
 #include "hebi_cpp_api/group_command.hpp"
@@ -20,14 +19,18 @@ namespace arm = hebi::experimental::arm;
 namespace hebi {
 namespace ros {
 
+enum ArmFSM {
+  ACTION,
+  TOPIC,
+  COMPLIANCE,
+};
+
 class ArmNode : public rclcpp::Node {
 public:
   using ArmMotion = hebi_msgs::action::ArmMotion;
   using GoalHandleArmMotion = rclcpp_action::ServerGoalHandle<ArmMotion>;
 
   std::unique_ptr<arm::Arm> arm_;
-  Eigen::VectorXd home_position_;
-  int num_joints_;
   
   ArmNode() : Node("arm_node") {
 
@@ -40,11 +43,7 @@ public:
     this->declare_parameter("home_position", std::vector<double>({}));
     this->declare_parameter("ik_seed", std::vector<double>({}));
     this->declare_parameter("use_traj_times", true);
-    this->declare_parameter("fsm_state", "action");
-
-    if (!initializeArm()) {
-      throw std::runtime_error("Aborting!");
-    }
+    this->declare_parameter("fsm_state", "ACTION");
 
     // Parameter subscriber
     parameter_event_handler_ = std::make_shared<rclcpp::ParameterEventHandler>(this);
@@ -52,6 +51,7 @@ public:
     // Parameter callbacks
     ik_seed_callback_handle_ = parameter_event_handler_->add_parameter_callback("ik_seed", std::bind(&ArmNode::ikSeedCallback, this, std::placeholders::_1));
     use_traj_times_callback_handle_ = parameter_event_handler_->add_parameter_callback("use_traj_times", std::bind(&ArmNode::useTrajTimesCallback, this, std::placeholders::_1));
+    fsm_state_callback_handle_ = parameter_event_handler_->add_parameter_callback("fsm_state", std::bind(&ArmNode::fsmStateCallback, this, std::placeholders::_1));
 
     // Subscribers
     joint_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("joint_jog", 50, std::bind(&ArmNode::jointJogCallback, this, std::placeholders::_1));
@@ -61,7 +61,8 @@ public:
 
     // Publishers
     arm_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("joint_states", 50);
-    center_of_mass_publisher_ = this->create_publisher<geometry_msgs::msg::Inertia>("inertia", 100);
+    center_of_mass_publisher_ = this->create_publisher<geometry_msgs::msg::Inertia>("inertia", 50);
+    end_effector_pose_publisher_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("ee_pose", 50);
     
     // start the action server
     action_server_ = rclcpp_action::create_server<ArmMotion>(
@@ -70,7 +71,115 @@ public:
       std::bind(&ArmNode::handleArmMotionGoal, this, std::placeholders::_1, std::placeholders::_2),
       std::bind(&ArmNode::handleArmMotionCancel, this, std::placeholders::_1),
       std::bind(&ArmNode::handleArmMotionAccepted, this, std::placeholders::_1));
+
+    // Initialize the arm
+    if (!initializeArm()) {
+      RCLCPP_ERROR(this->get_logger(), "Could not initialize arm!");
+      return;
+    }
+
+    // Go to home position
+    try {
+      arm_->update();
+      arm_->setGoal(arm::Goal::createFromPosition(home_position_));
+    }
+    catch (const std::runtime_error& e) {
+      RCLCPP_ERROR(this->get_logger(), "Could not go to home position: %s", e.what());
+      return;
+    }
   }
+
+  void publishState() {
+    // Publish Joint State
+    auto& fdbk = arm_->lastFeedback();
+
+    auto pos = fdbk.getPosition();
+    auto vel = fdbk.getVelocity();
+    auto eff = fdbk.getEffort();
+
+    state_msg_.position.resize(pos.size());
+    state_msg_.velocity.resize(vel.size());
+    state_msg_.effort.resize(eff.size());
+    state_msg_.header.stamp = this->now();
+
+    Eigen::VectorXd::Map(&state_msg_.position[0], pos.size()) = pos;
+    Eigen::VectorXd::Map(&state_msg_.velocity[0], vel.size()) = vel;
+    Eigen::VectorXd::Map(&state_msg_.effort[0], eff.size()) = eff;
+
+    arm_state_pub_->publish(state_msg_);
+
+    // Publish End Effector Pose
+    Eigen::Vector3d cur_pose;
+    Eigen::Matrix3d cur_orientation;
+    arm_->FK(pos, cur_pose, cur_orientation);
+    Eigen::Quaterniond cur_orientation_quat(cur_orientation);
+
+    geometry_msgs::msg::PoseStamped pose_msg;
+    pose_msg.header.stamp = this->now();
+    pose_msg.pose.position.x = cur_pose[0];
+    pose_msg.pose.position.y = cur_pose[1];
+    pose_msg.pose.position.z = cur_pose[2];
+    pose_msg.pose.orientation.x = cur_orientation_quat.x();
+    pose_msg.pose.orientation.y = cur_orientation_quat.y();
+    pose_msg.pose.orientation.z = cur_orientation_quat.z();
+    pose_msg.pose.orientation.w = cur_orientation_quat.w();
+
+    end_effector_pose_publisher_->publish(pose_msg);
+
+    // Publish Center of Mass
+    auto& model = arm_->robotModel();
+    Eigen::VectorXd masses;
+    robot_model::Matrix4dVector frames;
+    model.getMasses(masses);
+    model.getFK(robot_model::FrameType::CenterOfMass, pos, frames);
+
+    center_of_mass_message_.m = 0.0;
+    Eigen::Vector3d weighted_sum_com = Eigen::Vector3d::Zero();
+    for(int i = 0; i < model.getFrameCount(robot_model::FrameType::CenterOfMass); ++i) {
+      center_of_mass_message_.m += masses(i);
+      frames[i] *= masses(i);
+      weighted_sum_com(0) += frames[i](0, 3);
+      weighted_sum_com(1) += frames[i](1, 3);
+      weighted_sum_com(2) += frames[i](2, 3);
+    }
+    weighted_sum_com /= center_of_mass_message_.m;
+
+    center_of_mass_message_.com.x = weighted_sum_com(0);
+    center_of_mass_message_.com.y = weighted_sum_com(1);
+    center_of_mass_message_.com.z = weighted_sum_com(2);
+
+    center_of_mass_publisher_->publish(center_of_mass_message_);
+  }
+
+private:
+
+  ArmFSM fsm_state_{ArmFSM::ACTION};
+  Eigen::VectorXd home_position_;
+  int num_joints_;
+
+  Eigen::VectorXd ik_seed_;
+  bool use_ik_seed_{false};
+
+  bool use_traj_times_{true};
+
+  sensor_msgs::msg::JointState state_msg_;
+  geometry_msgs::msg::Inertia center_of_mass_message_;
+
+  rclcpp::Subscription<control_msgs::msg::JointJog>::SharedPtr joint_jog_subscriber_;
+  rclcpp::Subscription<control_msgs::msg::JointJog>::SharedPtr cartesian_jog_subscriber_;
+  rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr cartesian_waypoint_subscriber_;
+  rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr joint_waypoint_subscriber_;
+
+  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr arm_state_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::Inertia>::SharedPtr center_of_mass_publisher_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr end_effector_pose_publisher_;
+
+  rclcpp_action::Server<hebi_msgs::action::ArmMotion>::SharedPtr action_server_;
+
+  std::shared_ptr<rclcpp::ParameterEventHandler> parameter_event_handler_;
+  std::shared_ptr<rclcpp::ParameterCallbackHandle> ik_seed_callback_handle_;
+  std::shared_ptr<rclcpp::ParameterCallbackHandle> use_traj_times_callback_handle_;
+  std::shared_ptr<rclcpp::ParameterCallbackHandle> fsm_state_callback_handle_;
 
   ////////////////////// PARAMETER CALLBACK FUNCTIONS //////////////////////
   void ikSeedCallback(const rclcpp::Parameter & p) {
@@ -108,16 +217,59 @@ public:
     RCLCPP_INFO(this->get_logger(), "Found and successfully updated 'use_traj_times' parameter to %s", use_traj_times_ ? "true" : "false");
   }
 
+  void fsmStateCallback(const rclcpp::Parameter & p) {
+    RCLCPP_INFO(
+      this->get_logger(), "Received an update to parameter \"%s\" of type '%s': %s",
+      p.get_name().c_str(),
+      p.get_type_name().c_str(),
+      p.as_string().c_str());
+
+    std::string fsm_state_string;
+    this->get_parameter("fsm_state", fsm_state_string);
+    if (fsm_state_string == "ACTION") {
+      fsm_state_ = ArmFSM::ACTION;
+      RCLCPP_INFO(this->get_logger(), "Found and successfully updated 'fsm_state' parameter; Setting fsm_state to ACTION");
+      unsetComplianceMode();
+    } else if (fsm_state_string == "TOPIC") {
+      fsm_state_ = ArmFSM::TOPIC;
+      RCLCPP_INFO(this->get_logger(), "Found and successfully updated 'fsm_state' parameter; Setting fsm_state to TOPIC");
+      unsetComplianceMode();
+    } else if (fsm_state_string == "COMPLIANCE") {
+      fsm_state_ = ArmFSM::COMPLIANCE;
+      RCLCPP_INFO(this->get_logger(), "Found and successfully updated 'fsm_state' parameter; Setting fsm_state to COMPLIANCE");
+      setComplianceMode();
+    } else {
+      RCLCPP_WARN(this->get_logger(), "'fsm_parameter' does not match any known states; Ignoring!");
+    }
+  }
+
+  void setComplianceMode() {
+    // Sleep for a bit to make sure the arm is done moving
+    rclcpp::sleep_for(std::chrono::milliseconds(500));
+    // Set the arm to compliance mode
+    arm_->cancelGoal();
+    RCLCPP_INFO(this->get_logger(), "Arm is now in compliance mode!");
+  }
+
+  void unsetComplianceMode() {
+    // Set a goal from current position to switch to action/topic mode
+    arm_->setGoal(arm::Goal::createFromPosition(arm_->lastFeedback().getPosition()));
+  }
+
   //////////////////////// ACTION HANDLER FUNCTIONS ////////////////////////
 
   rclcpp_action::GoalResponse handleArmMotionGoal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const ArmMotion::Goal> goal) {
     RCLCPP_INFO(this->get_logger(), "Received arm motion action request");
     (void)uuid;
-    if (goal->wp_type != "cartesian" && goal->wp_type != "joint") {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - invalid waypoint type, should be 'cartesian' or 'joint'");
+    if (fsm_state_ != ArmFSM::ACTION) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - not in ACTION state");
       return rclcpp_action::GoalResponse::REJECT;
     }
-    if (goal->waypoints.points.empty()) {
+    else if (goal->wp_type != "CARTESIAN" && goal->wp_type != "JOINT") {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - invalid waypoint type, should be 'CARTESIAN' or 'JOINT'");
+      return rclcpp_action::GoalResponse::REJECT;
+    }
+    else if (goal->waypoints.points.empty()) {
       RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - no waypoints specified");
       return rclcpp_action::GoalResponse::REJECT;
     }
@@ -157,7 +309,7 @@ public:
 
     std::string waypoint_type = goal->wp_type;
 
-    if (waypoint_type == "cartesian") {
+    if (waypoint_type == "CARTESIAN") {
       // Get each waypoint in cartesian space
       Eigen::Matrix3Xd xyz_positions(3, num_waypoints);
       Eigen::Matrix3Xd orientation(3, num_waypoints);
@@ -174,7 +326,7 @@ public:
       }
 
       updateCartesianWaypoints(use_traj_times, wp_times, xyz_positions, &orientation);
-    } else if (waypoint_type == "joint") {
+    } else if (waypoint_type == "JOINT") {
       // Get each waypoint in joint space
       Eigen::MatrixXd pos(num_joints_, num_waypoints);
       Eigen::MatrixXd vel(num_joints_, num_waypoints);
@@ -211,12 +363,21 @@ public:
     setColor(color);
 
     while (!arm_->atGoal() && rclcpp::ok()) {
-      // check if there is a cancel request
+      // Check if there is a cancel request
       if (goal_handle->is_canceling()) {
         result->success = false;
         goal_handle->canceled(result);
         setColor({0, 0, 0, 0});
         RCLCPP_INFO(this->get_logger(), "Arm motion was cancelled");
+        return;
+      }
+
+      // Check if FSM state has changed
+      if (fsm_state_ != ArmFSM::ACTION) {
+        result->success = false;
+        goal_handle->abort(result);
+        setColor({0, 0, 0, 0});
+        RCLCPP_INFO(this->get_logger(), "Arm motion was aborted due to FSM state change");
         return;
       }
 
@@ -242,6 +403,16 @@ public:
 
   // Callback for trajectories with joint angle waypoints
   void jointWaypointsCallback(const trajectory_msgs::msg::JointTrajectory::SharedPtr joint_trajectory) {
+
+    if (fsm_state_ != ArmFSM::TOPIC) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Not in TOPIC state; ignoring trajectory");
+      return;
+    }
+
+    if (joint_trajectory->points.empty()) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "No waypoints specified");
+      return;
+    }
 
     auto num_waypoints = joint_trajectory->points.size();
     Eigen::MatrixXd pos(num_joints_, num_waypoints);
@@ -277,6 +448,16 @@ public:
   // Callback for trajectories with cartesian position waypoints
   void cartesianWaypointsCallback(const trajectory_msgs::msg::JointTrajectory::SharedPtr target_waypoints) {
 
+    if (fsm_state_ != ArmFSM::TOPIC) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Not in TOPIC state; ignoring trajectory");
+      return;
+    }
+
+    if (target_waypoints->points.empty()) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "No waypoints specified");
+      return;
+    }
+
     // Fill in an Eigen::Matrix3xd with the xyz goal
     size_t num_waypoints = target_waypoints->points.size();
     Eigen::Matrix3Xd xyz_positions(3, num_waypoints);
@@ -299,6 +480,11 @@ public:
   // "Jog" the arm along each joint
   void jointJogCallback(const control_msgs::msg::JointJog::SharedPtr jog_msg) {
 
+    if (fsm_state_ != ArmFSM::TOPIC) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Not in TOPIC state; ignoring jog");
+      return;
+    }
+
     bool inc_vel = true;
     if (jog_msg->velocities.empty()) {
       RCLCPP_WARN_STREAM(this->get_logger(), "No velocities specified... Assuming zero velocity");
@@ -310,6 +496,7 @@ public:
     }
 
     // Get current position and orientation
+    // (We use the last position command for smoother motion)
     auto cur_pos = arm_->lastFeedback().getPositionCommand();
     Eigen::MatrixXd pos(num_joints_, 1);
     Eigen::MatrixXd vel(num_joints_, 1);
@@ -339,12 +526,18 @@ public:
   // smoothly to the new location
   void cartesianJogCallback(const control_msgs::msg::JointJog::SharedPtr jog_msg) {
 
+    if (fsm_state_ != ArmFSM::TOPIC) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Not in TOPIC state; ignoring jog");
+      return;
+    }
+
     if (jog_msg->displacements.size() != 3) {
       RCLCPP_ERROR_STREAM(this->get_logger(), "Displacement size not correct");
       return;
     }
     
     // Get current position and orientation
+    // (We use the last position command for smoother motion)
     Eigen::Vector3d cur_pos;
     Eigen::Matrix3d cur_orientation;
     arm_->FK(arm_->lastFeedback().getPositionCommand(), cur_pos, cur_orientation);
@@ -368,7 +561,7 @@ public:
     updateCartesianWaypoints(use_traj_times_, times, xyz_positions, &orientation);
   }
 
-  //////////////////////// OTHER UTILITY FUNCTIONS ////////////////////////
+  /////////////////////////// UTILITY FUNCTIONS ///////////////////////////
 
   void setColor(const Color& color) {
     auto& command = arm_->pendingCommand();
@@ -376,76 +569,6 @@ public:
       command[i].led().set(color);
     }
   }
-
-  void publishState() {
-    auto& fdbk = arm_->lastFeedback();
-
-    // how is there not a better way to do this?
-
-    // Need to copy data from VectorXd to vector<double> in ros msg
-    auto pos = fdbk.getPosition();
-    auto vel = fdbk.getVelocity();
-    auto eff = fdbk.getEffort();
-
-    state_msg_.position.resize(pos.size());
-    state_msg_.velocity.resize(vel.size());
-    state_msg_.effort.resize(eff.size());
-    state_msg_.header.stamp = this->now();
-
-    Eigen::VectorXd::Map(&state_msg_.position[0], pos.size()) = pos;
-    Eigen::VectorXd::Map(&state_msg_.velocity[0], vel.size()) = vel;
-    Eigen::VectorXd::Map(&state_msg_.effort[0], eff.size()) = eff;
-
-    arm_state_pub_->publish(state_msg_);
-
-    // compute arm CoM
-    auto& model = arm_->robotModel();
-    Eigen::VectorXd masses;
-    robot_model::Matrix4dVector frames;
-    model.getMasses(masses);
-    model.getFK(robot_model::FrameType::CenterOfMass, pos, frames);
-
-    center_of_mass_message_.m = 0.0;
-    Eigen::Vector3d weighted_sum_com = Eigen::Vector3d::Zero();
-    for(int i = 0; i < model.getFrameCount(robot_model::FrameType::CenterOfMass); ++i) {
-      center_of_mass_message_.m += masses(i);
-      frames[i] *= masses(i);
-      weighted_sum_com(0) += frames[i](0, 3);
-      weighted_sum_com(1) += frames[i](1, 3);
-      weighted_sum_com(2) += frames[i](2, 3);
-    }
-    weighted_sum_com /= center_of_mass_message_.m;
-
-    center_of_mass_message_.com.x = weighted_sum_com(0);
-    center_of_mass_message_.com.y = weighted_sum_com(1);
-    center_of_mass_message_.com.z = weighted_sum_com(2);
-
-    center_of_mass_publisher_->publish(center_of_mass_message_);
-  }
-
-private:
-
-  Eigen::VectorXd ik_seed_;
-  bool use_ik_seed_{false};
-
-  bool use_traj_times_{true};
-
-  sensor_msgs::msg::JointState state_msg_;
-  geometry_msgs::msg::Inertia center_of_mass_message_;
-
-  rclcpp::Subscription<control_msgs::msg::JointJog>::SharedPtr joint_jog_subscriber_;
-  rclcpp::Subscription<control_msgs::msg::JointJog>::SharedPtr cartesian_jog_subscriber_;
-  rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr cartesian_waypoint_subscriber_;
-  rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr joint_waypoint_subscriber_;
-
-  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr arm_state_pub_;
-  rclcpp::Publisher<geometry_msgs::msg::Inertia>::SharedPtr center_of_mass_publisher_;
-
-  rclcpp_action::Server<hebi_msgs::action::ArmMotion>::SharedPtr action_server_;
-
-  std::shared_ptr<rclcpp::ParameterEventHandler> parameter_event_handler_;
-  std::shared_ptr<rclcpp::ParameterCallbackHandle> ik_seed_callback_handle_;
-  std::shared_ptr<rclcpp::ParameterCallbackHandle> use_traj_times_callback_handle_;
 
   // Each row is a separate joint; each column is a separate waypoint.
   void updateJointWaypoints(const bool use_traj_times, const Eigen::VectorXd& times, const Eigen::MatrixXd& angles, const Eigen::MatrixXd& velocities, const Eigen::MatrixXd& accelerations) {
@@ -498,28 +621,11 @@ private:
     // Convert orientation to Euler angles
     Eigen::Vector3d cur_orientation_euler = cur_orientation.eulerAngles(0, 1, 2);
 
-    // Print out the current pose and euler angles
-    // RCLCPP_INFO_STREAM(this->get_logger(), "Current Pose: "
-    //                                         << cur_pose[0] << ", "
-    //                                         << cur_pose[1] << ", "
-    //                                         << cur_pose[2] << " ; "
-    //                                         << cur_orientation_euler[0] << ", "
-    //                                         << cur_orientation_euler[1] << ", "
-    //                                         << cur_orientation_euler[2]);
-
     // For each waypoint, find the joint angles to move to it, starting from the last
     // waypoint, and save into the position vector.
     if (orientation) {
       // If we are given tip directions, add these too...
       for (size_t i = 0; i < num_waypoints; ++i) {
-
-        // RCLCPP_WARN_STREAM(this->get_logger(), "Target Pose: "
-        //                                              << xyz_positions.col(i)[0] << ", "
-        //                                              << xyz_positions.col(i)[1] << ", "
-        //                                              << xyz_positions.col(i)[2] << " ; "
-        //                                              << orientation->col(i)[0] << ", "
-        //                                              << orientation->col(i)[1] << ", "
-        //                                              << orientation->col(i)[2]) ;
 
         // Covert orientation to a 3x3 rotation matrix
         Eigen::Matrix3d rotation_matrix;
@@ -689,6 +795,28 @@ private:
       use_traj_times_ = true;
     }
 
+    // Get the "fsm_state" for the arm
+    std::string fsm_state_string;
+    if (this->has_parameter("fsm_state")) {
+      this->get_parameter("fsm_state", fsm_state_string);
+      if (fsm_state_string == "ACTION") {
+        fsm_state_ = ArmFSM::ACTION;
+        RCLCPP_INFO(this->get_logger(), "Found and successfully read 'fsm_state' parameter; Setting fsm_state to ACTION");
+      } else if (fsm_state_string == "TOPIC") {
+        fsm_state_ = ArmFSM::TOPIC;
+        RCLCPP_INFO(this->get_logger(), "Found and successfully read 'fsm_state' parameter; Setting fsm_state to TOPIC");
+      } else if (fsm_state_string == "COMPLIANCE") {
+        fsm_state_ = ArmFSM::COMPLIANCE;
+        RCLCPP_INFO(this->get_logger(), "Found and successfully read 'fsm_state' parameter; Setting fsm_state to COMPLIANCE");
+      } else {
+        RCLCPP_WARN(this->get_logger(), "'fsm_parameter' does not match any known states; Setting fsm_state to ACTION");
+        fsm_state_ = ArmFSM::ACTION;
+      }
+    } else {
+      RCLCPP_WARN(this->get_logger(), "Could not find/read 'fsm_state' parameter; Setting fsm_state to ACTION");
+      fsm_state_ = ArmFSM::ACTION;
+    }
+
     // Make a list of family/actuator formatted names for the JointState publisher
     std::vector<std::string> full_names;
     for (size_t idx=0; idx<names.size(); ++idx) {
@@ -721,50 +849,25 @@ private:
 } // namespace hebi
 
 int main(int argc, char ** argv) {
-
-  // Initialize ROS
   rclcpp::init(argc, argv);
+  auto node = std::make_shared<hebi::ros::ArmNode>();
 
-  try {
-    auto node = std::make_shared<hebi::ros::ArmNode>();
+  /////////////////// Main Loop ///////////////////
+  while (rclcpp::ok()) {
 
-    /////////////////// Main Loop ///////////////////
+    // Update feedback, and command the arm to move along its planned path
+    // (this also acts as a loop-rate limiter so no 'sleep' is needed)
+    if (!node->arm_->update())
+      RCLCPP_WARN(node->get_logger(), "Error Getting Feedback -- Check Connection");
+    else if (!node->arm_->send())
+      RCLCPP_WARN(node->get_logger(), "Error Sending Commands -- Check Connection");
 
-    // We update with a current timestamp so the "setGoal" function
-    // is planning from the correct time for a smooth start
+    node->publishState();
 
-    auto t = node->now();
-
-    node->arm_->update();
-    node->arm_->setGoal(arm::Goal::createFromPosition(node->home_position_));
-
-    auto prev_t = t;
-    while (rclcpp::ok()) {
-      t = node->now();
-
-      // Update feedback, and command the arm to move along its planned path
-      // (this also acts as a loop-rate limiter so no 'sleep' is needed)
-      if (!node->arm_->update())
-        RCLCPP_WARN(node->get_logger(), "Error Getting Feedback -- Check Connection");
-      else if (!node->arm_->send())
-        RCLCPP_WARN(node->get_logger(), "Error Sending Commands -- Check Connection");
-
-      node->publishState();
-
-      // If a simulator reset has occurred, go back to the home position.
-      if (t < prev_t) {
-        RCLCPP_INFO(node->get_logger(), "Returning to home pose after simulation reset");
-        node->arm_->setGoal(arm::Goal::createFromPosition(node->home_position_));
-      }
-      prev_t = t;
-
-      // Call any pending callbacks (note -- this may update our planned motion)
-      rclcpp::spin_some(node);
-    }
-  } catch (const std::exception &e) {
-    RCLCPP_ERROR(rclcpp::get_logger("arm_node"), "Caught runtime error: %s", e.what());
-    return -1;
+    // Call any pending callbacks (note -- this may update our planned motion)
+    rclcpp::spin_some(node);
   }
 
+  rclcpp::shutdown();
   return 0;
 }

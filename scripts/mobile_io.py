@@ -129,20 +129,22 @@ class MobileIONode(Node):
         
         self.get_logger().info("Connected to Mobile IO!")
 
-        layout_file = self.get_parameter("layout_file").get_parameter_value().string_value
-        layout_file_path = get_package_share_directory('hebi_ros2_examples') + "/config/" + layout_file
-
-        self.get_logger().info("Loading layout file: " + layout_file_path)
-
-        layout_url = 'http://10.10.10.150/'
-        with open(layout_file_path) as f:
-            layout = json.load(f)
-        response = requests.post(layout_url, json=layout, timeout=5)
-        if response.status_code != 200:
-            self.get_logger().error("Could not load layout file")
-            return False
+        # Commented out until the MobileIO app is fixed
         
-        self.get_logger().info("Loaded layout file!")
+        # layout_file = self.get_parameter("layout_file").get_parameter_value().string_value
+        # layout_file_path = get_package_share_directory('hebi_ros2_examples') + "/config/" + layout_file
+
+        # self.get_logger().info("Loading layout file: " + layout_file_path)
+
+        # layout_url = 'http://10.10.10.150/'
+        # with open(layout_file_path) as f:
+        #     layout = json.load(f)
+        # response = requests.post(layout_url, json=layout, timeout=5)
+        # if response.status_code != 200:
+        #     self.get_logger().error("Could not load layout file")
+        #     return False
+        
+        # self.get_logger().info("Loaded layout file!")
 
         self.mio.set_axis_label(1, "vy")
         self.mio.set_axis_label(2, "vx")

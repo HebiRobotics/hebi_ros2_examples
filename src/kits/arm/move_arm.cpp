@@ -54,7 +54,7 @@ public:
     point.time_from_start = rclcpp::Duration::from_seconds(2.0);
     goal_msg.waypoints.points.push_back(point);
     goal_msg.use_wp_times = true;
-    goal_msg.wp_type = "cartesian";
+    goal_msg.wp_type = "CARTESIAN";
 
     int N = 50;
     for (int i = 1; i <= N; ++i) 
