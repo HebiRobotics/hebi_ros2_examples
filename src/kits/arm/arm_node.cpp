@@ -19,12 +19,6 @@ namespace arm = hebi::experimental::arm;
 namespace hebi {
 namespace ros {
 
-enum ArmFSM {
-  ACTION,
-  TOPIC,
-  COMPLIANCE,
-};
-
 class ArmNode : public rclcpp::Node {
 public:
   using ArmMotion = hebi_msgs::action::ArmMotion;
@@ -43,7 +37,7 @@ public:
     this->declare_parameter("home_position", std::vector<double>({}));
     this->declare_parameter("ik_seed", std::vector<double>({}));
     this->declare_parameter("use_traj_times", true);
-    this->declare_parameter("fsm_state", "ACTION");
+    this->declare_parameter("compliant_mode", false);
 
     // Parameter subscriber
     parameter_event_handler_ = std::make_shared<rclcpp::ParameterEventHandler>(this);
@@ -51,7 +45,7 @@ public:
     // Parameter callbacks
     ik_seed_callback_handle_ = parameter_event_handler_->add_parameter_callback("ik_seed", std::bind(&ArmNode::ikSeedCallback, this, std::placeholders::_1));
     use_traj_times_callback_handle_ = parameter_event_handler_->add_parameter_callback("use_traj_times", std::bind(&ArmNode::useTrajTimesCallback, this, std::placeholders::_1));
-    fsm_state_callback_handle_ = parameter_event_handler_->add_parameter_callback("fsm_state", std::bind(&ArmNode::fsmStateCallback, this, std::placeholders::_1));
+    compliant_mode_callback_handle_ = parameter_event_handler_->add_parameter_callback("compliant_mode", std::bind(&ArmNode::compliantModeCallback, this, std::placeholders::_1));
 
     // Subscribers
     joint_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("joint_jog", 50, std::bind(&ArmNode::jointJogCallback, this, std::placeholders::_1));
@@ -153,7 +147,7 @@ public:
 
 private:
 
-  ArmFSM fsm_state_{ArmFSM::ACTION};
+  bool compliant_mode_{false};
   Eigen::VectorXd home_position_;
   int num_joints_;
 
@@ -179,7 +173,7 @@ private:
   std::shared_ptr<rclcpp::ParameterEventHandler> parameter_event_handler_;
   std::shared_ptr<rclcpp::ParameterCallbackHandle> ik_seed_callback_handle_;
   std::shared_ptr<rclcpp::ParameterCallbackHandle> use_traj_times_callback_handle_;
-  std::shared_ptr<rclcpp::ParameterCallbackHandle> fsm_state_callback_handle_;
+  std::shared_ptr<rclcpp::ParameterCallbackHandle> compliant_mode_callback_handle_;
 
   ////////////////////// PARAMETER CALLBACK FUNCTIONS //////////////////////
   void ikSeedCallback(const rclcpp::Parameter & p) {
@@ -217,29 +211,20 @@ private:
     RCLCPP_INFO(this->get_logger(), "Found and successfully updated 'use_traj_times' parameter to %s", use_traj_times_ ? "true" : "false");
   }
 
-  void fsmStateCallback(const rclcpp::Parameter & p) {
+  void compliantModeCallback(const rclcpp::Parameter & p) {
     RCLCPP_INFO(
       this->get_logger(), "Received an update to parameter \"%s\" of type '%s': %s",
       p.get_name().c_str(),
       p.get_type_name().c_str(),
-      p.as_string().c_str());
+      p.as_bool() ? "true" : "false");
 
-    std::string fsm_state_string;
-    this->get_parameter("fsm_state", fsm_state_string);
-    if (fsm_state_string == "ACTION") {
-      fsm_state_ = ArmFSM::ACTION;
-      RCLCPP_INFO(this->get_logger(), "Found and successfully updated 'fsm_state' parameter; Setting fsm_state to ACTION");
-      unsetComplianceMode();
-    } else if (fsm_state_string == "TOPIC") {
-      fsm_state_ = ArmFSM::TOPIC;
-      RCLCPP_INFO(this->get_logger(), "Found and successfully updated 'fsm_state' parameter; Setting fsm_state to TOPIC");
-      unsetComplianceMode();
-    } else if (fsm_state_string == "COMPLIANCE") {
-      fsm_state_ = ArmFSM::COMPLIANCE;
-      RCLCPP_INFO(this->get_logger(), "Found and successfully updated 'fsm_state' parameter; Setting fsm_state to COMPLIANCE");
+    this->get_parameter("compliant_mode", compliant_mode_);
+    RCLCPP_INFO(this->get_logger(), "Found and successfully updated 'compliant_mode' parameter to %s", compliant_mode_ ? "true" : "false");
+
+    if (compliant_mode_) {
       setComplianceMode();
     } else {
-      RCLCPP_WARN(this->get_logger(), "'fsm_parameter' does not match any known states; Ignoring!");
+      unsetComplianceMode();
     }
   }
 
@@ -261,8 +246,8 @@ private:
   rclcpp_action::GoalResponse handleArmMotionGoal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const ArmMotion::Goal> goal) {
     RCLCPP_INFO(this->get_logger(), "Received arm motion action request");
     (void)uuid;
-    if (fsm_state_ != ArmFSM::ACTION) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - not in ACTION state");
+    if (compliant_mode_) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - in compliant mode!");
       return rclcpp_action::GoalResponse::REJECT;
     }
     else if (goal->wp_type != "CARTESIAN" && goal->wp_type != "JOINT") {
@@ -372,12 +357,12 @@ private:
         return;
       }
 
-      // Check if FSM state has changed
-      if (fsm_state_ != ArmFSM::ACTION) {
+      // Check if compliant mode is active
+      if (compliant_mode_) {
         result->success = false;
         goal_handle->abort(result);
         setColor({0, 0, 0, 0});
-        RCLCPP_INFO(this->get_logger(), "Arm motion was aborted due to FSM state change");
+        RCLCPP_INFO(this->get_logger(), "Arm motion was aborted due to compliant mode activation");
         return;
       }
 
@@ -404,8 +389,8 @@ private:
   // Callback for trajectories with joint angle waypoints
   void jointWaypointsCallback(const trajectory_msgs::msg::JointTrajectory::SharedPtr joint_trajectory) {
 
-    if (fsm_state_ != ArmFSM::TOPIC) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Not in TOPIC state; ignoring trajectory");
+    if (compliant_mode_) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Deactivate compliant mode to use joint trajectory");
       return;
     }
 
@@ -413,6 +398,9 @@ private:
       RCLCPP_ERROR_STREAM(this->get_logger(), "No waypoints specified");
       return;
     }
+
+    // Print length of trajectory
+    RCLCPP_INFO_STREAM(this->get_logger(), "Received trajectory with " << joint_trajectory->points.size() << " waypoints");
 
     auto num_waypoints = joint_trajectory->points.size();
     Eigen::MatrixXd pos(num_joints_, num_waypoints);
@@ -448,8 +436,8 @@ private:
   // Callback for trajectories with cartesian position waypoints
   void cartesianWaypointsCallback(const trajectory_msgs::msg::JointTrajectory::SharedPtr target_waypoints) {
 
-    if (fsm_state_ != ArmFSM::TOPIC) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Not in TOPIC state; ignoring trajectory");
+    if (compliant_mode_) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Deactivate compliant mode to use cartesian trajectory");
       return;
     }
 
@@ -480,8 +468,8 @@ private:
   // "Jog" the arm along each joint
   void jointJogCallback(const control_msgs::msg::JointJog::SharedPtr jog_msg) {
 
-    if (fsm_state_ != ArmFSM::TOPIC) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Not in TOPIC state; ignoring jog");
+    if (compliant_mode_) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Deactivate compliant mode to use joint jog");
       return;
     }
 
@@ -526,8 +514,8 @@ private:
   // smoothly to the new location
   void cartesianJogCallback(const control_msgs::msg::JointJog::SharedPtr jog_msg) {
 
-    if (fsm_state_ != ArmFSM::TOPIC) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Not in TOPIC state; ignoring jog");
+    if (compliant_mode_) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Deactivate compliant mode to use cartesian jog");
       return;
     }
 
@@ -793,28 +781,6 @@ private:
     } else {
       RCLCPP_WARN(this->get_logger(), "Could not find/read 'use_traj_times' parameter; Setting use_traj_times to true!");
       use_traj_times_ = true;
-    }
-
-    // Get the "fsm_state" for the arm
-    std::string fsm_state_string;
-    if (this->has_parameter("fsm_state")) {
-      this->get_parameter("fsm_state", fsm_state_string);
-      if (fsm_state_string == "ACTION") {
-        fsm_state_ = ArmFSM::ACTION;
-        RCLCPP_INFO(this->get_logger(), "Found and successfully read 'fsm_state' parameter; Setting fsm_state to ACTION");
-      } else if (fsm_state_string == "TOPIC") {
-        fsm_state_ = ArmFSM::TOPIC;
-        RCLCPP_INFO(this->get_logger(), "Found and successfully read 'fsm_state' parameter; Setting fsm_state to TOPIC");
-      } else if (fsm_state_string == "COMPLIANCE") {
-        fsm_state_ = ArmFSM::COMPLIANCE;
-        RCLCPP_INFO(this->get_logger(), "Found and successfully read 'fsm_state' parameter; Setting fsm_state to COMPLIANCE");
-      } else {
-        RCLCPP_WARN(this->get_logger(), "'fsm_parameter' does not match any known states; Setting fsm_state to ACTION");
-        fsm_state_ = ArmFSM::ACTION;
-      }
-    } else {
-      RCLCPP_WARN(this->get_logger(), "Could not find/read 'fsm_state' parameter; Setting fsm_state to ACTION");
-      fsm_state_ = ArmFSM::ACTION;
     }
 
     // Make a list of family/actuator formatted names for the JointState publisher

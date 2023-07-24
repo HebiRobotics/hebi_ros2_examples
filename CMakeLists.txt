@@ -125,7 +125,9 @@ ament_python_install_package(${PROJECT_NAME})
 
 # Install python executables
 install(PROGRAMS
-  scripts/mobile_io.py
+  scripts/record_and_play.py
+  scripts/publish_trajectory.py
+  scripts/mobile_io/rosie.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

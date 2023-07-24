@@ -37,7 +37,7 @@ class MobileIONode(Node):
         self.cartesian_velocity_max = 0.2
         self.cartesian_velocity = np.zeros(3)
 
-        self.cmd_vel_linear_max = 1.0
+        self.cmd_vel_linear_max = 0.5
         self.cmd_vel_angular_max = np.pi/2
         self.cmd_vel_linear = np.zeros(2)
         self.cmd_vel_angular = 0.0
@@ -48,7 +48,7 @@ class MobileIONode(Node):
 
         self.timer_cartesian_jog = self.create_timer(0.02, self.cartesian_jog_callback)
         self.timer_joint_jog = self.create_timer(0.02, self.joint_jog_callback)
-        self.timer_cmd_vel = self.create_timer(0.02, self.cmd_vel_callback)
+        self.timer_cmd_vel = self.create_timer(0.1, self.cmd_vel_callback)
     
     def mio_callback(self):
         self.mio.update()

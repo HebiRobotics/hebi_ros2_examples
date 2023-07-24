@@ -43,31 +43,36 @@ public:
         RCLCPP_INFO(this->get_logger(), "Action server ready");
     }
 
+    double nan = std::numeric_limits<double>::quiet_NaN();
+
     auto goal_msg = ArmMotion::Goal();
     trajectory_msgs::msg::JointTrajectoryPoint point;
 
     RCLCPP_INFO(this->get_logger(), "Sending waypoints");
-    point.positions = {0.24, -0.2, 0.27, M_PI, M_PI/2, M_PI/2};
-    // point.positions = {0.01, 2.09439, 2.09439, 0.01, 1.5707963, 0.01};
+    // point.positions = {0.24, -0.2, 0.27, M_PI, M_PI/2, M_PI/2};
+    point.positions = {0.0, 2.09439, 2.09439, 0.0, M_PI/2, 0.0};
     point.velocities = {0, 0, 0, 0, 0, 0};
     point.accelerations = {0, 0, 0, 0, 0, 0};
     point.time_from_start = rclcpp::Duration::from_seconds(2.0);
     goal_msg.waypoints.points.push_back(point);
     goal_msg.use_wp_times = true;
-    goal_msg.wp_type = "CARTESIAN";
+    goal_msg.wp_type = "JOINT";
 
-    int N = 50;
-    for (int i = 1; i <= N; ++i) 
+    double dt = 0.25, t = 2.0;
+    while (t < 18.0)
     {
-      point.positions = {0.24, -0.2 + i*0.4/N, 0.27, M_PI, M_PI/2, M_PI/2};
-      point.time_from_start = rclcpp::Duration::from_seconds(2 + ((double)i)/((double)N));
+      t += dt;
+      point.positions = {M_PI/2.0 * sin(M_PI*t/4.0), 2.09439, 2.09439, 0.0, M_PI/2, 0.0};
+      point.velocities = {M_PI*M_PI/8.0 * cos(M_PI*t/4.0), 0.0, 0.0, 0.0, 0.0, 0.0};
+      point.accelerations = {nan, nan, nan, nan, nan, nan};
+      point.time_from_start = rclcpp::Duration::from_seconds(t);
       goal_msg.waypoints.points.push_back(point);
     }
 
     RCLCPP_INFO(this->get_logger(), "Sending waypoints");
 
     auto send_goal_options = rclcpp_action::Client<ArmMotion>::SendGoalOptions();
-    // send_goal_options.goal_response_callback = std::bind(&MoveArm::goal_response_callback, this, std::placeholders::_1);
+    send_goal_options.goal_response_callback = std::bind(&MoveArm::goal_response_callback, this, std::placeholders::_1);
     send_goal_options.feedback_callback = std::bind(&MoveArm::feedback_callback, this, std::placeholders::_1, std::placeholders::_2);
     send_goal_options.result_callback = std::bind(&MoveArm::result_callback, this, std::placeholders::_1);
     
@@ -78,8 +83,7 @@ private:
   rclcpp_action::Client<ArmMotion>::SharedPtr client_ptr_;
   rclcpp::TimerBase::SharedPtr timer_;
 
-  void goal_response_callback(std::shared_future<GoalHandleArmMotion::SharedPtr> future) {
-    auto goal_handle = future.get();
+  void goal_response_callback(const GoalHandleArmMotion::SharedPtr & goal_handle) {
     if (!goal_handle) {
       RCLCPP_ERROR(this->get_logger(), "Goal was rejected by server");
     } else {
