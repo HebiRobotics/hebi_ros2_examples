@@ -251,7 +251,7 @@ private:
       RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - in compliant mode!");
       return rclcpp_action::GoalResponse::REJECT;
     }
-    else if (goal->wp_type != "CARTESIAN" && goal->wp_type != "JOINT") {
+    else if (goal->wp_type != ArmMotion::Goal::CARTESIAN_SPACE && goal->wp_type != ArmMotion::Goal::JOINT_SPACE) {
       RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - invalid waypoint type, should be 'CARTESIAN' or 'JOINT'");
       return rclcpp_action::GoalResponse::REJECT;
     }
@@ -293,9 +293,9 @@ private:
     Eigen::VectorXd wp_times(num_waypoints);
     bool use_traj_times = goal->use_wp_times;
 
-    std::string waypoint_type = goal->wp_type;
+    int waypoint_type = goal->wp_type;
 
-    if (waypoint_type == "CARTESIAN") {
+    if (waypoint_type == ArmMotion::Goal::CARTESIAN_SPACE) {
       // Get each waypoint in cartesian space
       Eigen::Matrix3Xd xyz_positions(3, num_waypoints);
       Eigen::Matrix3Xd orientation(3, num_waypoints);
@@ -312,7 +312,7 @@ private:
       }
 
       updateCartesianWaypoints(use_traj_times, wp_times, xyz_positions, &orientation);
-    } else if (waypoint_type == "JOINT") {
+    } else if (waypoint_type == ArmMotion::Goal::JOINT_SPACE) {
       // Get each waypoint in joint space
       Eigen::MatrixXd pos(num_joints_, num_waypoints);
       Eigen::MatrixXd vel(num_joints_, num_waypoints);

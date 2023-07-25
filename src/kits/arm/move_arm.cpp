@@ -56,7 +56,7 @@ public:
     point.time_from_start = rclcpp::Duration::from_seconds(2.0);
     goal_msg.waypoints.points.push_back(point);
     goal_msg.use_wp_times = true;
-    goal_msg.wp_type = "JOINT";
+    goal_msg.wp_type = ArmMotion::Goal::JOINT_SPACE;
 
     double dt = 0.25, t = 2.0;
     while (t < 18.0)
