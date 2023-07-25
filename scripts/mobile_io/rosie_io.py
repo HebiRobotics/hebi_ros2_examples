@@ -24,17 +24,17 @@ class MobileIONode(Node):
         self.timer_mio = self.create_timer(0.02, self.mio_callback)
         
         # Create publishers for the /cartesian_jog and /joint_jog topics
-        self.cartesian_jog_pub = self.create_publisher(JointJog, '/cartesian_jog', 10)
-        self.joint_jog_pub = self.create_publisher(JointJog, '/joint_jog', 10)
-        self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
+        self.cartesian_jog_pub = self.create_publisher(JointJog, 'arm/cartesian_jog', 10)
+        self.joint_jog_pub = self.create_publisher(JointJog, 'arm/joint_jog', 10)
+        self.cmd_vel_pub = self.create_publisher(Twist, 'cmd_vel', 10)
 
-        self.joint_dt = 0.02
+        self.joint_dt = 0.2
         self.joint_velocity_max = 1.0
         self.joint_velocity = np.zeros(6)
         self.joint_direction = 1.0
 
-        self.cartesian_dt = 0.05
-        self.cartesian_velocity_max = 0.2
+        self.cartesian_dt = 0.2
+        self.cartesian_velocity_max = 0.25
         self.cartesian_velocity = np.zeros(3)
 
         self.cmd_vel_linear_max = 0.5
@@ -46,9 +46,9 @@ class MobileIONode(Node):
             self.get_logger().error("Could not initialize Mobile IO")
             return
 
-        self.timer_cartesian_jog = self.create_timer(0.02, self.cartesian_jog_callback)
-        self.timer_joint_jog = self.create_timer(0.02, self.joint_jog_callback)
-        self.timer_cmd_vel = self.create_timer(0.1, self.cmd_vel_callback)
+        self.timer_cartesian_jog = self.create_timer(0.05, self.cartesian_jog_callback)
+        self.timer_joint_jog = self.create_timer(0.05, self.joint_jog_callback)
+        self.timer_cmd_vel = self.create_timer(0.05, self.cmd_vel_callback)
     
     def mio_callback(self):
         self.mio.update()

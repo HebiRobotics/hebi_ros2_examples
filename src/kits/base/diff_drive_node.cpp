@@ -29,8 +29,8 @@ public:
 
   BaseNode() : Node("diff_drive_node") {
 
-    this->declare_parameter("names", std::vector<std::string>({}));
-    this->declare_parameter("families", std::vector<std::string>({}));
+    this->declare_parameter("names", rclcpp::PARAMETER_STRING_ARRAY);
+    this->declare_parameter("families", rclcpp::PARAMETER_STRING_ARRAY);
 
     if (!this->initializeBase()) {
       throw std::runtime_error("Aborting!");

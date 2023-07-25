@@ -32,9 +32,9 @@ public:
 
   BaseNode() : Node("mecanum_base_node") {
 
-    this->declare_parameter("names", std::vector<std::string>({}));
-    this->declare_parameter("families", std::vector<std::string>({}));
-    this->declare_parameter("publish_odom", bool(false));
+    this->declare_parameter("names", rclcpp::PARAMETER_STRING_ARRAY);
+    this->declare_parameter("families", rclcpp::PARAMETER_STRING_ARRAY);
+    this->declare_parameter("publish_odom", false);
 
     if (!this->initializeBase()) {
       throw std::runtime_error("Aborting!");

@@ -1,17 +1,25 @@
-import os
-import sys
-
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess
-from launch.substitutions import Command, FindExecutable, LaunchConfiguration, PathJoinSubstitution, PythonExpression
+from launch.substitutions import PathJoinSubstitution, LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+from launch.actions import DeclareLaunchArgument
 
 
 def generate_launch_description():
   
+  declared_arguments = []
+  declared_arguments.append(
+    DeclareLaunchArgument(
+      "params_file",
+      default_value="omni_base_params.yaml",
+      description="Path to the YAML file containing the parameters for the arm node.",
+    )
+  )
+
+  params_file = LaunchConfiguration("params_file")
+
   robot_params = PathJoinSubstitution(
-    [FindPackageShare('hebi_ros2_examples'), 'config', 'omni_base_params.yaml']
+    [FindPackageShare('hebi_ros2_examples'), 'config', params_file]
   )
 
   omni_base_node = Node(

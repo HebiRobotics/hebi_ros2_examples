@@ -1,5 +1,5 @@
 omni_base_node:
   ros__parameters:
-    names: [ "W1", "W2", "W3" ]
+    names: [ "wheel_1", "wheel_2", "wheel_3" ]
     families: [ "Rosie" ]
     publish_odom: true

@@ -28,14 +28,15 @@ public:
   
   ArmNode() : Node("arm_node") {
 
-    this->declare_parameter("names", std::vector<std::string>({}));
-    this->declare_parameter("families", std::vector<std::string>({}));
-    this->declare_parameter("gains_package", "");
-    this->declare_parameter("gains_file", "");
-    this->declare_parameter("hrdf_package", "");
-    this->declare_parameter("hrdf_file", "");
-    this->declare_parameter("home_position", std::vector<double>({}));
-    this->declare_parameter("ik_seed", std::vector<double>({}));
+    this->declare_parameter("names", rclcpp::PARAMETER_STRING_ARRAY);
+    this->declare_parameter("families", rclcpp::PARAMETER_STRING_ARRAY);
+    this->declare_parameter("gains_package", rclcpp::PARAMETER_STRING);
+    this->declare_parameter("gains_file", rclcpp::PARAMETER_STRING);
+    this->declare_parameter("hrdf_package", rclcpp::PARAMETER_STRING);
+    this->declare_parameter("hrdf_file", rclcpp::PARAMETER_STRING);
+    this->declare_parameter("home_position", rclcpp::PARAMETER_DOUBLE_ARRAY);
+    this->declare_parameter("ik_seed", rclcpp::PARAMETER_DOUBLE_ARRAY);
+    this->declare_parameter("prefix", "");
     this->declare_parameter("use_traj_times", true);
     this->declare_parameter("compliant_mode", false);
 
@@ -685,6 +686,15 @@ private:
     success = success && loadParam("hrdf_package", hrdf_package);
     success = success && loadParam("hrdf_file", hrdf_file);
 
+    // Print all parameters
+    RCLCPP_INFO(this->get_logger(), "Successfully read the following parameters:");
+    RCLCPP_INFO(this->get_logger(), "  families: %s", families[0].c_str());
+    RCLCPP_INFO(this->get_logger(), "  names: %s", names[0].c_str());
+    RCLCPP_INFO(this->get_logger(), "  gains_package: %s", gains_package.c_str());
+    RCLCPP_INFO(this->get_logger(), "  gains_file: %s", gains_file.c_str());
+    RCLCPP_INFO(this->get_logger(), "  hrdf_package: %s", hrdf_package.c_str());
+    RCLCPP_INFO(this->get_logger(), "  hrdf_file: %s", hrdf_file.c_str());
+
     if(!success) {
       RCLCPP_ERROR(this->get_logger(), "ABORTING!");
       return false;
@@ -783,11 +793,16 @@ private:
       use_traj_times_ = true;
     }
 
+    // Get the "prefix" for the joint state topic
+    std::string prefix;
+    if (this->has_parameter("prefix")) {
+      this->get_parameter("prefix", prefix);
+    }
+
     // Make a list of family/actuator formatted names for the JointState publisher
     std::vector<std::string> full_names;
     for (size_t idx=0; idx<names.size(); ++idx) {
-      full_names.push_back(names.at(idx));
-      // full_names.push_back(families.at(0) + "/" + names.at(idx));
+      full_names.push_back(prefix + names.at(idx));
     }
     // TODO: Figure out a way to get link names from the arm, so it doesn't need to be input separately
     state_msg_.name = full_names;

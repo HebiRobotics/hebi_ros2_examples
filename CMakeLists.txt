@@ -127,7 +127,8 @@ ament_python_install_package(${PROJECT_NAME})
 install(PROGRAMS
   scripts/record_and_play.py
   scripts/publish_trajectory.py
-  scripts/mobile_io/rosie.py
+  scripts/joint_state_combiner.py
+  scripts/mobile_io/rosie_io.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
