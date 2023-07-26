@@ -18,29 +18,41 @@ class MobileIONode(Node):
 
         self.declare_parameter("family", "HEBI")
         self.declare_parameter("name", "mobileIO")
+        self.declare_parameter("prefix", "arm")
         self.declare_parameter("layout_file", "mobileIO_layout.json")
 
         self.mio = None
         self.timer_mio = self.create_timer(0.02, self.mio_callback)
         
         # Create publishers for the /cartesian_jog and /joint_jog topics
-        self.cartesian_jog_pub = self.create_publisher(JointJog, 'arm/cartesian_jog', 10)
-        self.joint_jog_pub = self.create_publisher(JointJog, 'arm/joint_jog', 10)
+        self.cartesian_jog_pub = self.create_publisher(JointJog, self.get_parameter("prefix").get_parameter_value().string_value + 'cartesian_jog', 10)
+        self.joint_jog_pub = self.create_publisher(JointJog, self.get_parameter("prefix").get_parameter_value().string_value + 'joint_jog', 10)
         self.cmd_vel_pub = self.create_publisher(Twist, 'cmd_vel', 10)
+
+        self.num_joints = 5
+        self.joint_names = ['J1_base', 'J2_shoulder', 'J3_elbow', 'J4_wrist1', 'J5_wrist2']#, 'J6_wrist3']
 
         self.joint_dt = 0.2
         self.joint_velocity_max = 1.0
-        self.joint_velocity = np.zeros(6)
+        self.joint_velocity = np.zeros(self.num_joints)
+        self.prev_joint_velocity = np.zeros(self.num_joints)
         self.joint_direction = 1.0
+        self.alpha_joint = 0.1
 
         self.cartesian_dt = 0.2
         self.cartesian_velocity_max = 0.25
         self.cartesian_velocity = np.zeros(3)
+        self.prev_cartesian_velocity = np.zeros(3)
+        self.alpha_cartesian = 0.2
 
         self.cmd_vel_linear_max = 0.5
         self.cmd_vel_angular_max = np.pi/2
         self.cmd_vel_linear = np.zeros(2)
         self.cmd_vel_angular = 0.0
+
+        self.prev_cmd_vel_linear = np.zeros(2)
+        self.prev_cmd_vel_angular = 0.0
+        self.alpha_cmd_vel = 0.1
 
         if (not self.initialize()):
             self.get_logger().error("Could not initialize Mobile IO")
@@ -55,12 +67,8 @@ class MobileIONode(Node):
 
         self.joint_direction = -(int(self.mio.get_button_state(7)) * 2 - 1)
 
-        self.joint_velocity[0] = int(self.mio.get_button_state(1)) * self.joint_velocity_max * self.joint_direction
-        self.joint_velocity[1] = int(self.mio.get_button_state(2)) * self.joint_velocity_max * self.joint_direction
-        self.joint_velocity[2] = int(self.mio.get_button_state(3)) * self.joint_velocity_max * self.joint_direction
-        self.joint_velocity[3] = int(self.mio.get_button_state(4)) * self.joint_velocity_max * self.joint_direction
-        self.joint_velocity[4] = int(self.mio.get_button_state(5)) * self.joint_velocity_max * self.joint_direction
-        self.joint_velocity[5] = int(self.mio.get_button_state(6)) * self.joint_velocity_max * self.joint_direction
+        for i in range(self.num_joints):
+            self.joint_velocity[i] = int(self.mio.get_button_state(i+1)) * self.joint_velocity_max * self.joint_direction
 
         self.cartesian_velocity[0] = self.mio.get_axis_state(8) * self.cartesian_velocity_max
         self.cartesian_velocity[1] = -self.mio.get_axis_state(7) * self.cartesian_velocity_max
@@ -80,36 +88,41 @@ class MobileIONode(Node):
         msg.header.frame_id = 'base_link'
         msg.joint_names = ['x', 'y', 'z']
         msg.duration = self.cartesian_dt
+
+        self.prev_cartesian_velocity = self.cartesian_velocity * self.alpha_cartesian + self.prev_cartesian_velocity * (1.0 - self.alpha_cartesian)
         
-        msg.displacements = (self.cartesian_velocity * self.cartesian_dt).tolist()
+        msg.displacements = (self.prev_cartesian_velocity * self.cartesian_dt).tolist()
 
         # Don't publish if no joints are moving
-        if np.linalg.norm(self.cartesian_velocity) > 0.0:
+        if np.linalg.norm(self.prev_cartesian_velocity) > 1e-3:
             self.cartesian_jog_pub.publish(msg)
 
     def joint_jog_callback(self):
         msg = JointJog()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = 'base_link'
-        msg.joint_names = ['J1_base', 'J2_shoulder', 'J3_elbow', 'J4_wrist1', 'J5_wrist2', 'J6_wrist3']
+        msg.joint_names = self.joint_names
         msg.duration = self.joint_dt
 
-        msg.displacements = (self.joint_velocity * self.joint_dt).tolist()
-        msg.velocities = self.joint_velocity.tolist()
+        self.prev_joint_velocity = self.joint_velocity * self.alpha_joint + self.prev_joint_velocity * (1.0 - self.alpha_joint)
+
+        msg.displacements = (self.prev_joint_velocity * self.joint_dt).tolist()
+        msg.velocities = self.prev_joint_velocity.tolist()
 
         # Don't publish if no joints are moving
-        if np.linalg.norm(self.joint_velocity) > 0.0:
+        if np.linalg.norm(self.prev_joint_velocity) > 1e-2:
             self.joint_jog_pub.publish(msg)
     
     def cmd_vel_callback(self):
         msg = Twist()
-        msg.linear.x = self.cmd_vel_linear[0]
-        msg.linear.y = self.cmd_vel_linear[1]
-        msg.angular.z = self.cmd_vel_angular
+        msg.linear.x = self.cmd_vel_linear[0] * self.alpha_cmd_vel + self.prev_cmd_vel_linear[0] * (1.0 - self.alpha_cmd_vel)
+        msg.linear.y = self.cmd_vel_linear[1] * self.alpha_cmd_vel + self.prev_cmd_vel_linear[1] * (1.0 - self.alpha_cmd_vel)
+        msg.angular.z = self.cmd_vel_angular * self.alpha_cmd_vel + self.prev_cmd_vel_angular * (1.0 - self.alpha_cmd_vel)
 
-        # Don't publish if no joints are moving
-        if np.linalg.norm(self.cmd_vel_linear) > 0.0 or np.abs(self.cmd_vel_angular) > 0.0:
-            self.cmd_vel_pub.publish(msg)
+        self.cmd_vel_pub.publish(msg)
+
+        self.prev_cmd_vel_linear = [msg.linear.x, msg.linear.y]
+        self.prev_cmd_vel_angular = msg.angular.z
 
 
     def initialize(self):

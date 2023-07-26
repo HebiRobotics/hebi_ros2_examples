@@ -35,7 +35,7 @@ class RecordPlayIONode(Node):
 
     self.declare_parameter("family", "HEBI")
     self.declare_parameter("name", "mobileIO")
-    self.declare_parameter("layout_file", "mobileIO_layout.json")
+    self.declare_parameter("prefix", "/")
     self.declare_parameter('path_dt', 0.25)
 
     self.mio = None
@@ -52,7 +52,7 @@ class RecordPlayIONode(Node):
     self.in_motion = False
 
     # Create action client for /arm_motion
-    self.arm_motion_client = ActionClient(self, ArmMotion, 'arm_motion')
+    self.arm_motion_client = ActionClient(self, ArmMotion, self.get_parameter("prefix").get_parameter_value().string_value + 'arm_motion')
 
     # Create subscriber for /joint_states
     self.joint_states_subscription = self.create_subscription(JointState, '/joint_states', self.joint_states_callback, 10)
@@ -166,6 +166,8 @@ class RecordPlayIONode(Node):
         return False
     
     self.get_logger().info("Connected to Mobile IO!")
+
+    self.mio.resetUI()
 
     self.mio.set_button_label(1, "REC")
     self.mio.set_button_label(2, "PLAY")

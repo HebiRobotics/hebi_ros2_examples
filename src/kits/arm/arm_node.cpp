@@ -615,17 +615,9 @@ private:
       last_position = ik_seed_;
     }
 
-    // Get current position and orientation
-    Eigen::Vector3d cur_pose;
-    Eigen::Matrix3d cur_orientation;
-    arm_->FK(last_position, cur_pose, cur_orientation);
-
-    // Convert orientation to Euler angles
-    Eigen::Vector3d cur_orientation_euler = cur_orientation.eulerAngles(0, 1, 2);
-
     // For each waypoint, find the joint angles to move to it, starting from the last
     // waypoint, and save into the position vector.
-    if (orientation) {
+    if (orientation && num_joints_ >= 6) {
       // If we are given tip directions, add these too...
       for (size_t i = 0; i < num_waypoints; ++i) {
 

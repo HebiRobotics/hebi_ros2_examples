@@ -102,15 +102,6 @@ def generate_launch_description():
       arguments=["-d", rviz_config_file],
   )
 
-  # Run mobile_io_node
-  mobile_io_node = ExecuteProcess(
-    cmd=[
-      'ros2', 'run', 'hebi_ros2_examples', 'rosie_io.py','--ros-args','-p','family:=Hariharan'
-    ],
-    output='screen'
-  )
-
-
   return LaunchDescription(
     declared_arguments +
     [
@@ -119,6 +110,5 @@ def generate_launch_description():
       joint_state_combiner_node,
       robot_state_publisher_node,
       rviz_node,
-      mobile_io_node
     ]
   )
