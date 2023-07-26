@@ -146,6 +146,7 @@ install(PROGRAMS
   scripts/joint_state_combiner.py
   scripts/mobile_io/rosie_io.py
   scripts/mobile_io/record_and_play_io.py
+  scripts/mobile_io/hexapod_io.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
