@@ -23,8 +23,6 @@ class ArmNode : public rclcpp::Node {
 public:
   using ArmMotion = hebi_msgs::action::ArmMotion;
   using GoalHandleArmMotion = rclcpp_action::ServerGoalHandle<ArmMotion>;
-
-  std::unique_ptr<arm::Arm> arm_;
   
   ArmNode() : Node("arm_node") {
 
@@ -73,6 +71,8 @@ public:
       return;
     }
 
+    timer_ = this->create_wall_timer(std::chrono::milliseconds(10), std::bind(&ArmNode::publishState, this));
+
     // Go to home position
     try {
       arm_->update();
@@ -84,69 +84,18 @@ public:
     }
   }
 
-  void publishState() {
-    // Publish Joint State
-    auto& fdbk = arm_->lastFeedback();
-
-    auto pos = fdbk.getPosition();
-    auto vel = fdbk.getVelocity();
-    auto eff = fdbk.getEffort();
-
-    state_msg_.position.resize(pos.size());
-    state_msg_.velocity.resize(vel.size());
-    state_msg_.effort.resize(eff.size());
-    state_msg_.header.stamp = this->now();
-
-    Eigen::VectorXd::Map(&state_msg_.position[0], pos.size()) = pos;
-    Eigen::VectorXd::Map(&state_msg_.velocity[0], vel.size()) = vel;
-    Eigen::VectorXd::Map(&state_msg_.effort[0], eff.size()) = eff;
-
-    arm_state_pub_->publish(state_msg_);
-
-    // Publish End Effector Pose
-    Eigen::Vector3d cur_pose;
-    Eigen::Matrix3d cur_orientation;
-    arm_->FK(pos, cur_pose, cur_orientation);
-    Eigen::Quaterniond cur_orientation_quat(cur_orientation);
-
-    geometry_msgs::msg::PoseStamped pose_msg;
-    pose_msg.header.stamp = this->now();
-    pose_msg.pose.position.x = cur_pose[0];
-    pose_msg.pose.position.y = cur_pose[1];
-    pose_msg.pose.position.z = cur_pose[2];
-    pose_msg.pose.orientation.x = cur_orientation_quat.x();
-    pose_msg.pose.orientation.y = cur_orientation_quat.y();
-    pose_msg.pose.orientation.z = cur_orientation_quat.z();
-    pose_msg.pose.orientation.w = cur_orientation_quat.w();
-
-    end_effector_pose_publisher_->publish(pose_msg);
-
-    // Publish Center of Mass
-    auto& model = arm_->robotModel();
-    Eigen::VectorXd masses;
-    robot_model::Matrix4dVector frames;
-    model.getMasses(masses);
-    model.getFK(robot_model::FrameType::CenterOfMass, pos, frames);
-
-    center_of_mass_message_.m = 0.0;
-    Eigen::Vector3d weighted_sum_com = Eigen::Vector3d::Zero();
-    for(int i = 0; i < model.getFrameCount(robot_model::FrameType::CenterOfMass); ++i) {
-      center_of_mass_message_.m += masses(i);
-      frames[i] *= masses(i);
-      weighted_sum_com(0) += frames[i](0, 3);
-      weighted_sum_com(1) += frames[i](1, 3);
-      weighted_sum_com(2) += frames[i](2, 3);
-    }
-    weighted_sum_com /= center_of_mass_message_.m;
-
-    center_of_mass_message_.com.x = weighted_sum_com(0);
-    center_of_mass_message_.com.y = weighted_sum_com(1);
-    center_of_mass_message_.com.z = weighted_sum_com(2);
-
-    center_of_mass_publisher_->publish(center_of_mass_message_);
+  void update() {
+    // Update feedback, and command the arm to move along its planned path
+    // (this also acts as a loop-rate limiter so no 'sleep' is needed)
+    if (!arm_->update())
+      RCLCPP_WARN(this->get_logger(), "Error Getting Feedback -- Check Connection");
+    else if (!arm_->send())
+      RCLCPP_WARN(this->get_logger(), "Error Sending Commands -- Check Connection");
   }
 
 private:
+
+  std::unique_ptr<arm::Arm> arm_;
 
   bool compliant_mode_{false};
   Eigen::VectorXd home_position_;
@@ -168,6 +117,8 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr arm_state_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Inertia>::SharedPtr center_of_mass_publisher_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr end_effector_pose_publisher_;
+
+  rclcpp::TimerBase::SharedPtr timer_;
 
   rclcpp_action::Server<hebi_msgs::action::ArmMotion>::SharedPtr action_server_;
 
@@ -552,6 +503,68 @@ private:
 
   /////////////////////////// UTILITY FUNCTIONS ///////////////////////////
 
+  void publishState() {
+    // Publish Joint State
+    auto& fdbk = arm_->lastFeedback();
+
+    auto pos = fdbk.getPosition();
+    auto vel = fdbk.getVelocity();
+    auto eff = fdbk.getEffort();
+
+    state_msg_.position.resize(pos.size());
+    state_msg_.velocity.resize(vel.size());
+    state_msg_.effort.resize(eff.size());
+    state_msg_.header.stamp = this->now();
+
+    Eigen::VectorXd::Map(&state_msg_.position[0], pos.size()) = pos;
+    Eigen::VectorXd::Map(&state_msg_.velocity[0], vel.size()) = vel;
+    Eigen::VectorXd::Map(&state_msg_.effort[0], eff.size()) = eff;
+
+    arm_state_pub_->publish(state_msg_);
+
+    // Publish End Effector Pose
+    Eigen::Vector3d cur_pose;
+    Eigen::Matrix3d cur_orientation;
+    arm_->FK(pos, cur_pose, cur_orientation);
+    Eigen::Quaterniond cur_orientation_quat(cur_orientation);
+
+    geometry_msgs::msg::PoseStamped pose_msg;
+    pose_msg.header.stamp = this->now();
+    pose_msg.pose.position.x = cur_pose[0];
+    pose_msg.pose.position.y = cur_pose[1];
+    pose_msg.pose.position.z = cur_pose[2];
+    pose_msg.pose.orientation.x = cur_orientation_quat.x();
+    pose_msg.pose.orientation.y = cur_orientation_quat.y();
+    pose_msg.pose.orientation.z = cur_orientation_quat.z();
+    pose_msg.pose.orientation.w = cur_orientation_quat.w();
+
+    end_effector_pose_publisher_->publish(pose_msg);
+
+    // Publish Center of Mass
+    auto& model = arm_->robotModel();
+    Eigen::VectorXd masses;
+    robot_model::Matrix4dVector frames;
+    model.getMasses(masses);
+    model.getFK(robot_model::FrameType::CenterOfMass, pos, frames);
+
+    center_of_mass_message_.m = 0.0;
+    Eigen::Vector3d weighted_sum_com = Eigen::Vector3d::Zero();
+    for(int i = 0; i < model.getFrameCount(robot_model::FrameType::CenterOfMass); ++i) {
+      center_of_mass_message_.m += masses(i);
+      frames[i] *= masses(i);
+      weighted_sum_com(0) += frames[i](0, 3);
+      weighted_sum_com(1) += frames[i](1, 3);
+      weighted_sum_com(2) += frames[i](2, 3);
+    }
+    weighted_sum_com /= center_of_mass_message_.m;
+
+    center_of_mass_message_.com.x = weighted_sum_com(0);
+    center_of_mass_message_.com.y = weighted_sum_com(1);
+    center_of_mass_message_.com.z = weighted_sum_com(2);
+
+    center_of_mass_publisher_->publish(center_of_mass_message_);
+  }
+
   void setColor(const Color& color) {
     auto& command = arm_->pendingCommand();
     for (int i = 0; i < command.size(); ++i) {
@@ -729,7 +742,7 @@ private:
 
     // Load the appropriate gains file
     if (!arm_->loadGains(ament_index_cpp::get_package_share_directory(gains_package) + std::string("/") + gains_file)) {
-      RCLCPP_ERROR(this->get_logger(), "Could not load gains file and/or set arm gains. Attempting to continue.");
+      RCLCPP_WARN(this->get_logger(), "Could not load gains file and/or set arm gains. Attempting to continue.");
     } else {
       RCLCPP_INFO(this->get_logger(), "Gains file loaded");
     }
@@ -833,17 +846,9 @@ int main(int argc, char ** argv) {
   rclcpp::init(argc, argv);
   auto node = std::make_shared<hebi::ros::ArmNode>();
 
-  /////////////////// Main Loop ///////////////////
   while (rclcpp::ok()) {
 
-    // Update feedback, and command the arm to move along its planned path
-    // (this also acts as a loop-rate limiter so no 'sleep' is needed)
-    if (!node->arm_->update())
-      RCLCPP_WARN(node->get_logger(), "Error Getting Feedback -- Check Connection");
-    else if (!node->arm_->send())
-      RCLCPP_WARN(node->get_logger(), "Error Sending Commands -- Check Connection");
-
-    node->publishState();
+    node->update();
 
     // Call any pending callbacks (note -- this may update our planned motion)
     rclcpp::spin_some(node);

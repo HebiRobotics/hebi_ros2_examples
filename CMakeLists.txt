@@ -69,7 +69,7 @@ ament_target_dependencies(moveit_arm
   moveit_visual_tools
 )
 
-add_executable(omni_base_node src/kits/base/omni_base_node.cpp src/util/omni_base.cpp src/util/odom_publisher.cpp)
+add_executable(omni_base_node src/kits/base/omni_base_node.cpp src/kits/base/util/omni_base.cpp src/kits/base/util/odom_publisher.cpp)
 ament_target_dependencies(omni_base_node
   rclcpp
   rclcpp_action
@@ -83,7 +83,7 @@ ament_target_dependencies(omni_base_node
   tf2_ros
 )
 
-add_executable(mecanum_base_node src/kits/base/mecanum_base_node.cpp src/util/mecanum_base.cpp src/util/odom_publisher.cpp)
+add_executable(mecanum_base_node src/kits/base/mecanum_base_node.cpp src/kits/base/util/mecanum_base.cpp src/kits/base/util/odom_publisher.cpp)
 ament_target_dependencies(mecanum_base_node
   rclcpp
   rclcpp_action
@@ -97,7 +97,7 @@ ament_target_dependencies(mecanum_base_node
   tf2_ros
 )
 
-add_executable(diff_drive_node src/kits/base/diff_drive_node.cpp src/util/diff_drive.cpp src/util/odom_publisher.cpp)
+add_executable(diff_drive_node src/kits/base/diff_drive_node.cpp src/kits/base/util/diff_drive.cpp src/kits/base/util/odom_publisher.cpp)
 ament_target_dependencies(diff_drive_node
   rclcpp
   rclcpp_action
@@ -111,6 +111,22 @@ ament_target_dependencies(diff_drive_node
   tf2_ros
 )
 
+add_executable(hexapod_control src/kits/daisy/hexapod_control.cpp
+  src/kits/daisy/util/leg.cpp
+  src/kits/daisy/util/hexapod.cpp
+  src/kits/daisy/util/step.cpp
+  src/kits/daisy/util/hexapod_parameters.cpp
+  src/kits/daisy/xml_util/pugixml.cpp
+  src/kits/daisy/xml_util/xml_helpers.cpp
+)
+target_include_directories(hexapod_control PRIVATE src/kits/daisy)
+ament_target_dependencies(hexapod_control
+  rclcpp
+  geometry_msgs
+  hebi_cpp_api
+  sensor_msgs
+)
+
 install(TARGETS
   arm_node
   move_arm
@@ -118,6 +134,7 @@ install(TARGETS
   omni_base_node
   mecanum_base_node
   diff_drive_node
+  hexapod_control
   DESTINATION lib/${PROJECT_NAME})
 
 # Python modules
@@ -125,7 +142,6 @@ ament_python_install_package(${PROJECT_NAME})
 
 # Install python executables
 install(PROGRAMS
-  scripts/record_and_play.py
   scripts/publish_trajectory.py
   scripts/joint_state_combiner.py
   scripts/mobile_io/rosie_io.py
