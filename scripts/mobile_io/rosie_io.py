@@ -12,9 +12,9 @@ import json
 import requests
 
 
-class MobileIONode(Node):
+class RosieIONode(Node):
     def __init__(self):
-        super().__init__('mobileio_node')
+        super().__init__('rosie_io_node')
 
         self.declare_parameter("family", "HEBI")
         self.declare_parameter("name", "mobileIO")
@@ -25,8 +25,8 @@ class MobileIONode(Node):
         self.timer_mio = self.create_timer(0.02, self.mio_callback)
         
         # Create publishers for the /cartesian_jog and /joint_jog topics
-        self.cartesian_jog_pub = self.create_publisher(JointJog, self.get_parameter("prefix").get_parameter_value().string_value + 'cartesian_jog', 10)
-        self.joint_jog_pub = self.create_publisher(JointJog, self.get_parameter("prefix").get_parameter_value().string_value + 'joint_jog', 10)
+        self.cartesian_jog_pub = self.create_publisher(JointJog, self.get_parameter("prefix").get_parameter_value().string_value + '/cartesian_jog', 10)
+        self.joint_jog_pub = self.create_publisher(JointJog, self.get_parameter("prefix").get_parameter_value().string_value + '/joint_jog', 10)
         self.cmd_vel_pub = self.create_publisher(Twist, 'cmd_vel', 10)
 
         self.num_joints = 5
@@ -174,7 +174,7 @@ class MobileIONode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = MobileIONode()
+    node = RosieIONode()
     rclpy.spin(node)
     rclpy.shutdown()
 

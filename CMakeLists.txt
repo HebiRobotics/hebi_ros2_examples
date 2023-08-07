@@ -59,16 +59,6 @@ ament_target_dependencies(move_arm
   moveit_visual_tools
 )
 
-add_executable(moveit_arm src/kits/arm/moveit_example.cpp)
-ament_target_dependencies(moveit_arm
-  rclcpp
-  trajectory_msgs
-  geometry_msgs
-  moveit_msgs
-  moveit_ros_planning_interface
-  moveit_visual_tools
-)
-
 add_executable(omni_base_node src/kits/base/omni_base_node.cpp src/kits/base/util/omni_base.cpp src/kits/base/util/odom_publisher.cpp)
 ament_target_dependencies(omni_base_node
   rclcpp
@@ -119,7 +109,6 @@ add_executable(hexapod_control src/kits/daisy/hexapod_control.cpp
   src/kits/daisy/xml_util/pugixml.cpp
   src/kits/daisy/xml_util/xml_helpers.cpp
 )
-target_include_directories(hexapod_control PRIVATE src/kits/daisy)
 ament_target_dependencies(hexapod_control
   rclcpp
   geometry_msgs
@@ -127,15 +116,27 @@ ament_target_dependencies(hexapod_control
   sensor_msgs
 )
 
+add_executable(treaded_base_node src/kits/tready/treaded_base_node.cpp src/kits/tready/treaded_base.cpp)
+ament_target_dependencies(treaded_base_node
+  rclcpp
+  geometry_msgs
+  std_msgs
+  hebi_cpp_api
+  hebi_msgs
+  std_srvs
+)
+
+
 install(TARGETS
   arm_node
   move_arm
-  moveit_arm
   omni_base_node
   mecanum_base_node
   diff_drive_node
   hexapod_control
+  treaded_base_node
   DESTINATION lib/${PROJECT_NAME})
+
 
 # Python modules
 ament_python_install_package(${PROJECT_NAME})

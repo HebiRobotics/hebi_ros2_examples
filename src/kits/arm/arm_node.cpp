@@ -435,7 +435,7 @@ private:
       inc_vel = false;
     }
 
-    // Get current position and orientation
+    // Get current joint position
     // (We use the last position command for smoother motion)
     auto cur_pos = arm_->lastFeedback().getPositionCommand();
     Eigen::MatrixXd pos(num_joints_, 1);
