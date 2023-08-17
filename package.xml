@@ -4,10 +4,8 @@
   <name>hebi_ros2_examples</name>
   <version>1.0.0</version>
   <description>HEBI ROS2 examples</description>
-  <maintainer email="hariharan@hebirobotics.com">Hariharan Ravichandran</maintainer>
+  <maintainer email="chris@hebirobotics.com">Chris Bollinger</maintainer>
   <license>MIT</license>
-
-  <author email="hariharan@hebirobotics.com">Hariharan Ravichandran</author>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
   <buildtool_depend>ament_cmake_python</buildtool_depend>
