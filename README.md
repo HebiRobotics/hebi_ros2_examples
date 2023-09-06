@@ -5,7 +5,7 @@
 ```
 mkdir -p ~/hebi_ws/src
 cd ~/hebi_ws/src
-git clone https://github.com/HebiRobotics/hebi_cpp_api_ros
+git clone -b ros2 https://github.com/HebiRobotics/hebi_cpp_api_ros
 git clone https://github.com/HebiRobotics/hebi_description.git
 git clone https://github.com/HebiRobotics/hebi_ros2_cpp_examples
 ```
