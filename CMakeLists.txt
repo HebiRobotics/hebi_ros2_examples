@@ -23,12 +23,12 @@ find_package(std_srvs REQUIRED)
 find_package(hebi_cpp_api REQUIRED)
 find_package(hebi_msgs REQUIRED)
 
-find_package(moveit_ros_planning_interface REQUIRED)
-find_package(moveit_msgs REQUIRED)
-find_package(moveit_visual_tools REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(control_msgs REQUIRED)
+find_package(moveit_ros_planning_interface QUIET)
+find_package(moveit_msgs QUIET)
+find_package(moveit_visual_tools QUIET)
 
 include_directories(
   include
@@ -47,17 +47,20 @@ ament_target_dependencies(arm_node
   control_msgs
 )
 
-add_executable(move_arm src/kits/arm/move_arm.cpp)
-ament_target_dependencies(move_arm
-  rclcpp
-  rclcpp_action
-  trajectory_msgs
-  hebi_msgs
-  geometry_msgs
-  moveit_msgs
-  moveit_ros_planning_interface
-  moveit_visual_tools
-)
+if(moveit_ros_planning_interface_FOUND)
+  add_definitions(-DUSE_MOVEIT)
+  add_executable(move_arm src/kits/arm/move_arm.cpp)
+  ament_target_dependencies(move_arm
+    rclcpp
+    rclcpp_action
+    trajectory_msgs
+    hebi_msgs
+    geometry_msgs
+    moveit_msgs
+    moveit_ros_planning_interface
+    moveit_visual_tools
+  )
+endif()
 
 add_executable(omni_base_node src/kits/base/omni_base_node.cpp src/kits/base/util/omni_base.cpp src/kits/base/util/odom_publisher.cpp)
 ament_target_dependencies(omni_base_node
@@ -129,7 +132,6 @@ ament_target_dependencies(treaded_base_node
 
 install(TARGETS
   arm_node
-  move_arm
   omni_base_node
   mecanum_base_node
   diff_drive_node
@@ -137,6 +139,11 @@ install(TARGETS
   treaded_base_node
   DESTINATION lib/${PROJECT_NAME})
 
+if(moveit_ros_planning_interface_FOUND)
+  install(TARGETS
+    move_arm
+    DESTINATION lib/${PROJECT_NAME})
+endif()
 
 # Python modules
 ament_python_install_package(${PROJECT_NAME})

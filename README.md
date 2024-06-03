@@ -5,21 +5,22 @@
 ```
 mkdir -p ~/hebi_ws/src
 cd ~/hebi_ws/src
-git clone -b ros2 https://github.com/HebiRobotics/hebi_cpp_api_ros
-git clone https://github.com/HebiRobotics/hebi_description.git
-git clone https://github.com/HebiRobotics/hebi_ros2_cpp_examples
+git clone -b ros2 https://github.com/HebiRobotics/hebi_cpp_api_ros.git
+git clone -b ros2 https://github.com/HebiRobotics/hebi_description.git
+git clone https://github.com/HebiRobotics/hebi_msgs.git
+git clone https://github.com/HebiRobotics/hebi_ros2_examples.git
 ```
 
 Optional: If you want HEBI packages for `ros2_control`, execute these too.
 
 ```
-git clone https://github.com/HebiRobotics/hebi_hardware
-git clone https://github.com/HebiRobotics/hebi_bringup
+git clone https://github.com/HebiRobotics/hebi_hardware.git
+git clone https://github.com/HebiRobotics/hebi_bringup.git
 ```
 
 Optional: If you want HEBI package for MoveIt, clone the repos for `ros2_control` and run the following:
 ```
-git clone https://github.com/HebiRobotics/hebi_moveit_configs
+git clone -b ros2 https://github.com/HebiRobotics/hebi_moveit_configs.git
 ```
 
 Once you have cloned the necessary repositories, execute the following commands.
@@ -72,7 +73,7 @@ arm_node:
     home_position:
 ```
 
-The parameter is defined as follows -
+The parameters are defined as follows -
 - `names`: Array of "Names" of the HEBI Modules
 - `families`: Array of "Family" of HEBI Modules
 - `gains_package`: ROS package containing the gains file for your HEBI arm
@@ -82,15 +83,15 @@ The parameter is defined as follows -
 - `home_position`: Array of float values to move your arm after initialization.
 
 **NOTE:**
-- `names` and `families` of your modules can find these using Scope.
-- If the length of `home_position` array is greater than the number of joints, it will take the first appropriate values. **TO BE IMPLEMENTED**
+- `names` and `families` of your modules can be found using Scope.
+- If the length of `home_position` array is greater than the number of joints, the remaining values will be ignored. **TO BE IMPLEMENTED**
 
 The configuration file for HEBI Arm A-2085-05 is given below.
 ```
 arm_node:
   ros__parameters:
     names: [ "J1_base", "J2_shoulder", "J3_elbow", "J4_wrist1", "J5_wrist2" ]
-    families: [ "Hariharan" ]
+    families: [ "HEBI" ]
     gains_package: "hebi_description"
     gains_file: "config/gains/A-2085-05_gains.xml"
     hrdf_package: "hebi_description"
