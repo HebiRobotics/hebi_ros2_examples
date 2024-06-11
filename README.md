@@ -6,7 +6,7 @@
 mkdir -p ~/hebi_ws/src
 cd ~/hebi_ws/src
 git clone -b ros2 https://github.com/HebiRobotics/hebi_cpp_api_ros.git
-git clone -b ros2/$ROS_DISTRO https://github.com/HebiRobotics/hebi_description.git # ROS_DISTRO can be humble, iron, or jazzy
+git clone -b ros2 https://github.com/HebiRobotics/hebi_description.git
 git clone https://github.com/HebiRobotics/hebi_msgs.git
 git clone https://github.com/HebiRobotics/hebi_ros2_examples.git
 ```
