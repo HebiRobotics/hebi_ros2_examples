@@ -26,6 +26,32 @@ public:
   
   ArmNode() : Node("arm_node") {
 
+    // Parameter Description
+    auto names_des = rcl_interfaces::msg::ParameterDescriptor{};
+    auto families_des = rcl_interfaces::msg::ParameterDescriptor{};
+    auto gains_package_des = rcl_interfaces::msg::ParameterDescriptor{};
+    auto gains_file_des = rcl_interfaces::msg::ParameterDescriptor{};
+    auto hrdf_package_des = rcl_interfaces::msg::ParameterDescriptor{};
+    auto hrdf_file_des = rcl_interfaces::msg::ParameterDescriptor{};
+    auto home_position_des = rcl_interfaces::msg::ParameterDescriptor{};
+    auto ik_seed_des = rcl_interfaces::msg::ParameterDescriptor{};
+    auto prefix_des = rcl_interfaces::msg::ParameterDescriptor{};
+    auto use_traj_times_des = rcl_interfaces::msg::ParameterDescriptor{};
+    auto compliant_mode_des = rcl_interfaces::msg::ParameterDescriptor{};
+
+    names_des.description = "Array of Names of the HEBI Modules";
+    families_des.description = "Array of Families of HEBI Modules";
+    gains_package_des.description = "ROS package containing the gains file for your HEBI arm";
+    gains_file_des.description = "Relative path of the gains file from the gains_package";
+    hrdf_package_des.description = "ROS package containing the HRDF file for your HEBI arm";
+    hrdf_file_des.description = "Relative path of the HRDF file from the hrdf_package";
+    home_position_des.description = "Array of float values to move your arm after initialization.";
+    ik_seed_des.description = "Seed for inverse kinematics. Can be changed during runtime.";
+    prefix_des.description = "";
+    use_traj_times_des.description = "";
+    compliant_mode_des.description = "No arm motion can be commanded in compliant mode. Can be changed during runtime.";
+
+    // Declare default parameter values
     this->declare_parameter("names", rclcpp::PARAMETER_STRING_ARRAY);
     this->declare_parameter("families", rclcpp::PARAMETER_STRING_ARRAY);
     this->declare_parameter("gains_package", rclcpp::PARAMETER_STRING);
@@ -53,7 +79,7 @@ public:
     cartesian_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("cartesian_trajectory", 50, std::bind(&ArmNode::cartesianWaypointsCallback, this, std::placeholders::_1));
 
     // Publishers
-    arm_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("joint_states", 50);
+    arm_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("fdbk_joint_states", 50);
     center_of_mass_publisher_ = this->create_publisher<geometry_msgs::msg::Inertia>("inertia", 50);
     end_effector_pose_publisher_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("ee_pose", 50);
     
@@ -624,6 +650,7 @@ private:
         // Covert orientation to a 3x3 rotation matrix
         Eigen::Matrix3d rotation_matrix;
 
+        // Roll -> Pitch -> Yaw
         rotation_matrix = Eigen::AngleAxisd(orientation->col(i)[0], Eigen::Vector3d::UnitX()).matrix()
                         * Eigen::AngleAxisd(orientation->col(i)[1], Eigen::Vector3d::UnitY()).matrix()
                         * Eigen::AngleAxisd(orientation->col(i)[2], Eigen::Vector3d::UnitZ()).matrix();
