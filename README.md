@@ -83,7 +83,7 @@ The parameters are defined as follows -
 - `home_position`: Array of float values to move your arm after initialization.
 
 **NOTE:**
-- `names` and `families` of your modules can be found using Scope.
+- `names` and `families` of your modules can be found and changed using Scope.
 - If the length of `home_position` array is greater than the number of joints, the remaining values will be ignored. **TO BE IMPLEMENTED**
 
 The configuration file for HEBI Arm A-2085-05 is given below.
