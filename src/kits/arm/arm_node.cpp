@@ -522,7 +522,9 @@ private:
     orientation(0, 0) = cur_euler[0];
     orientation(1, 0) = cur_euler[1];
     orientation(2, 0) = cur_euler[2];
-    
+
+    RCLCPP_ERROR(this->get_logger(), "R: %f, P: %f, Y: %f", cur_euler[0], cur_euler[1], cur_euler[2]);
+
     // Replan
     updateCartesianWaypoints(use_traj_times_, times, xyz_positions, &orientation);
   }
@@ -650,7 +652,7 @@ private:
         // Covert orientation to a 3x3 rotation matrix
         Eigen::Matrix3d rotation_matrix;
 
-        // Roll -> Pitch -> Yaw ???
+        // Yaw -> Pitch -> Roll ???
         rotation_matrix = Eigen::AngleAxisd(orientation->col(i)[0], Eigen::Vector3d::UnitX()).matrix()
                         * Eigen::AngleAxisd(orientation->col(i)[1], Eigen::Vector3d::UnitY()).matrix()
                         * Eigen::AngleAxisd(orientation->col(i)[2], Eigen::Vector3d::UnitZ()).matrix();

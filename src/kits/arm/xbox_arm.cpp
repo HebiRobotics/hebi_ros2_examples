@@ -104,9 +104,15 @@ private:
     double pitch_vel_ = 0.0;
     double yaw_vel_ = 0.0;
 
+    // double x_vel_gain_ = 0.4;
+    // double y_vel_gain_ = 0.4;
+    // double z_vel_gain_ = 0.4;
+
     double x_vel_gain_ = 0.002;
     double y_vel_gain_ = 0.002;
     double z_vel_gain_ = 0.002;
+
+    double low_pass_admittance_ = 0.15;
 
     void joy_callback(const sensor_msgs::msg::Joy::SharedPtr msg)
     {
@@ -116,25 +122,25 @@ private:
 
     void process_controller()
     {
-        x_vel_ = x_vel_gain_ * controller_state_.axes.at(1);
-        y_vel_ = y_vel_gain_ * controller_state_.axes.at(0);
+        x_vel_ += low_pass_admittance_ * (x_vel_gain_ * controller_state_.axes.at(1) - x_vel_);
+        y_vel_ += low_pass_admittance_ * (y_vel_gain_ * controller_state_.axes.at(0) - y_vel_);
 
         // Up and down motion through L1 and L2
         // Remain stationary if neither pressed
         if (controller_state_.buttons.at(4) == 0 && 
             static_cast<int>(controller_state_.axes.at(2)) == 1)
         {
-            z_vel_ = 0.0;
+            z_vel_ += low_pass_admittance_ * (0 - z_vel_);
         }
         // Move up id L1 pressed
         else if (controller_state_.buttons.at(4) == 1)
         {
-            z_vel_ = z_vel_gain_;
+            z_vel_ += low_pass_admittance_ * (z_vel_gain_ - z_vel_);
         }
         // Move down if L2 pressed
         else if (static_cast<int>(controller_state_.axes.at(2)) == -1)
         {
-            z_vel_ = -z_vel_gain_;
+            z_vel_ += low_pass_admittance_ * (-z_vel_gain_ - z_vel_);
         }
     }
 
@@ -191,6 +197,10 @@ private:
         {
             cartesian_jog_msg.velocities.push_back(0.0);
         }
+        cartesian_jog_msg.velocities.at(0) = x_vel_;
+        cartesian_jog_msg.velocities.at(1) = y_vel_;
+        cartesian_jog_msg.velocities.at(2) = z_vel_;
+
 
         cartesian_jog_publisher_->publish(cartesian_jog_msg);
     }
