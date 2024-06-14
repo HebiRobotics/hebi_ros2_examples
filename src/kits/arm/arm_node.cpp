@@ -522,9 +522,7 @@ private:
     orientation(0, 0) = cur_euler[0];
     orientation(1, 0) = cur_euler[1];
     orientation(2, 0) = cur_euler[2];
-
-    RCLCPP_ERROR(this->get_logger(), "R: %f, P: %f, Y: %f", cur_euler[0], cur_euler[1], cur_euler[2]);
-
+    
     // Replan
     updateCartesianWaypoints(use_traj_times_, times, xyz_positions, &orientation);
   }
