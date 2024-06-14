@@ -75,6 +75,7 @@ public:
     // Subscribers
     joint_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("joint_jog", 50, std::bind(&ArmNode::jointJogCallback, this, std::placeholders::_1));
     cartesian_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("cartesian_jog", 50, std::bind(&ArmNode::cartesianJogCallback, this, std::placeholders::_1));
+    se3_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("se3_jog", 50, std::bind(&ArmNode::se3JogCallback, this, std::placeholders::_1));
     joint_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("joint_trajectory", 50, std::bind(&ArmNode::jointWaypointsCallback, this, std::placeholders::_1));
     cartesian_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("cartesian_trajectory", 50, std::bind(&ArmNode::cartesianWaypointsCallback, this, std::placeholders::_1));
 
@@ -137,6 +138,7 @@ private:
 
   rclcpp::Subscription<control_msgs::msg::JointJog>::SharedPtr joint_jog_subscriber_;
   rclcpp::Subscription<control_msgs::msg::JointJog>::SharedPtr cartesian_jog_subscriber_;
+  rclcpp::Subscription<control_msgs::msg::JointJog>::SharedPtr se3_jog_subscriber_;
   rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr cartesian_waypoint_subscriber_;
   rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr joint_waypoint_subscriber_;
 
@@ -529,6 +531,50 @@ private:
     updateCartesianWaypoints(use_traj_times_, times, xyz_positions, &orientation);
   }
 
+  // "Jog" the target end effector location in SE(3), replanning
+  // smoothly to the new location
+  // First three entires are angular, and last three are linear
+  void se3JogCallback(const control_msgs::msg::JointJog::SharedPtr jog_msg) {
+
+    if (compliant_mode_) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Deactivate compliant mode to use se3 jog");
+      return;
+    }
+
+    if (jog_msg->displacements.size() != 6) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Displacement size not correct");
+      return;
+    }
+    
+    // Get current position and orientation
+    // (We use the last position command for smoother motion)
+    Eigen::Vector3d cur_pos;
+    Eigen::Matrix3d cur_orientation, new_orientation;
+    arm_->FK(arm_->lastFeedback().getPositionCommand(), cur_pos, cur_orientation);
+
+    // Convert orientation to Euler angles
+    Eigen::Vector3d cur_euler = cur_orientation.eulerAngles(0, 1, 2);
+
+    Eigen::Matrix3Xd xyz_positions(3, 1);
+    Eigen::Matrix3Xd orientation(3, 1), temp_orientation(3, 1);
+    Eigen::VectorXd times(1);
+
+    times(0) = jog_msg->duration;
+    new_orientation = Eigen::AngleAxisd(jog_msg->displacements[2], Eigen::Vector3d::UnitZ()).matrix() 
+                      * Eigen::AngleAxisd(jog_msg->displacements[1], Eigen::Vector3d::UnitY()).matrix()
+                      * cur_orientation
+                      * Eigen::AngleAxisd(jog_msg->displacements[0], Eigen::Vector3d::UnitZ()).matrix();
+
+    orientation = new_orientation.eulerAngles(0, 1, 2);
+
+    xyz_positions(0, 0) = cur_pos[0] + jog_msg->displacements[3]; // x
+    xyz_positions(1, 0) = cur_pos[1] + jog_msg->displacements[4]; // y
+    xyz_positions(2, 0) = cur_pos[2] + jog_msg->displacements[5]; // z
+
+    // Replan
+    updateCartesianWaypoints(use_traj_times_, times, xyz_positions, &orientation);
+  }
+
   /////////////////////////// UTILITY FUNCTIONS ///////////////////////////
 
   void publishState() {
@@ -652,7 +698,8 @@ private:
         // Covert orientation to a 3x3 rotation matrix
         Eigen::Matrix3d rotation_matrix;
 
-        // Yaw -> Pitch -> Roll ???
+        // Yaw -> Pitch -> Roll
+        // Roll is in the global frame
         rotation_matrix = Eigen::AngleAxisd(orientation->col(i)[0], Eigen::Vector3d::UnitX()).matrix()
                         * Eigen::AngleAxisd(orientation->col(i)[1], Eigen::Vector3d::UnitY()).matrix()
                         * Eigen::AngleAxisd(orientation->col(i)[2], Eigen::Vector3d::UnitZ()).matrix();
