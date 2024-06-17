@@ -62,23 +62,20 @@ if(moveit_ros_planning_interface_FOUND)
   )
 endif()
 
-if(moveit_ros_planning_interface_FOUND)
-  add_definitions(-DUSE_MOVEIT)
-  add_executable(xbox_arm src/kits/arm/xbox_arm.cpp)
-  ament_target_dependencies(xbox_arm
-    rclcpp
-    rclcpp_action
-    trajectory_msgs
-    hebi_msgs
-    geometry_msgs
-    moveit_msgs
-    moveit_ros_planning_interface
-    moveit_visual_tools
-    hebi_cpp_api
-    hebi_msgs
-    control_msgs
-  )
-endif()
+add_executable(xbox_arm src/kits/arm/xbox_arm.cpp)
+ament_target_dependencies(xbox_arm
+  rclcpp
+  rclcpp_action
+  trajectory_msgs
+  hebi_msgs
+  geometry_msgs
+  moveit_msgs
+  moveit_ros_planning_interface
+  moveit_visual_tools
+  hebi_cpp_api
+  hebi_msgs
+  control_msgs
+)
 
 add_executable(omni_base_node src/kits/base/omni_base_node.cpp src/kits/base/util/omni_base.cpp src/kits/base/util/odom_publisher.cpp)
 ament_target_dependencies(omni_base_node
