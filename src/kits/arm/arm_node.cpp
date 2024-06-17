@@ -132,7 +132,8 @@ private:
 
   std::unique_ptr<arm::Arm> arm_;
 
-  bool homed_flag_ = false;
+  bool homed_flag_ = false; // Indicates that the end-effector has been homed initially
+  bool acting_flag_ = false; // Indicates that an action is being executed
 
   bool compliant_mode_{false};
   Eigen::VectorXd home_position_;
@@ -266,6 +267,9 @@ private:
   void startArmMotion(const std::shared_ptr<GoalHandleArmMotion> goal_handle) {
     RCLCPP_INFO(this->get_logger(), "Executing arm motion action");
     
+    // Acting flag should remain true while any action is being executed
+    acting_flag_ = true;
+
     // Wait until the action is complete, sending status/feedback along the way.
     rclcpp::Rate r(10);
 
@@ -318,6 +322,9 @@ private:
           RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - Position, velocity, and acceleration sizes not correct for waypoint index");
           result->success = false;
           goal_handle->abort(result);
+
+          // Reset acting flag
+          acting_flag_ = false;
           return;
         }
 
@@ -344,6 +351,9 @@ private:
         goal_handle->canceled(result);
         setColor({0, 0, 0, 0});
         RCLCPP_INFO(this->get_logger(), "Arm motion was cancelled");
+        
+        // Reset acting flag
+        acting_flag_ = false;
         return;
       }
 
@@ -353,6 +363,9 @@ private:
         goal_handle->abort(result);
         setColor({0, 0, 0, 0});
         RCLCPP_INFO(this->get_logger(), "Arm motion was aborted due to compliant mode activation");
+        
+        // Reset acting flag
+        acting_flag_ = false;
         return;
       }
 
@@ -370,6 +383,8 @@ private:
       goal_handle->succeed(result);
       RCLCPP_INFO(this->get_logger(), "Completed arm motion action");
       setColor({0, 0, 0, 0});
+      // Reset acting flag
+      acting_flag_ = false;
     }
 
   }
@@ -550,7 +565,7 @@ private:
   // First three entires are angular, and last three are linear
   void SE3JogCallback(const control_msgs::msg::JointJog::SharedPtr jog_msg) {
 
-    if (!homed_flag_)
+    if (!homed_flag_ || acting_flag_)
       return;
 
     if (compliant_mode_) {

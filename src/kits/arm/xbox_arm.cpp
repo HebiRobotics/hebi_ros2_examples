@@ -8,10 +8,6 @@
 
 #include <hebi_msgs/action/arm_motion.hpp>
 
-#include <unistd.h>
-#include <fcntl.h>
-#include <linux/joystick.h>
-
 #ifndef M_PI
   #define M_PI 3.14159265358979323846
 #endif
@@ -52,7 +48,7 @@ public:
         controller_state_.buttons = buttons_0;
         
         // Timer
-        this->timer_ = this->create_wall_timer(
+        timer_ = this->create_wall_timer(
         std::chrono::milliseconds(static_cast<int>(1000.0/rate)),
         std::bind(&XBoxArm::timer_callback, this));
 
@@ -64,6 +60,9 @@ public:
         // Subscribers
         joy_subscriber_ = this->create_subscription<sensor_msgs::msg::Joy>(
         "joy", 10, std::bind(&XBoxArm::joy_callback, this, std::placeholders::_1));
+
+        // Action Client
+        arm_motion_client_ = rclcpp_action::create_client<hebi_msgs::action::ArmMotion>(this, "arm_motion");
 
         RCLCPP_INFO(this->get_logger(), "Started X-Box arm controller");
     }
@@ -77,6 +76,7 @@ private:
     rclcpp::Publisher<control_msgs::msg::JointJog>::SharedPtr cartesian_jog_publisher_;
     rclcpp::Publisher<control_msgs::msg::JointJog>::SharedPtr SE3_jog_publisher_;
     rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_subscriber_;
+    rclcpp_action::Client<hebi_msgs::action::ArmMotion>::SharedPtr arm_motion_client_;
 
     // Initialize controller state
     sensor_msgs::msg::Joy controller_state_;
@@ -102,6 +102,9 @@ private:
 
     // Initialize tuned admittance value for low pass filtering
     double low_pass_admittance_ = 0.05;
+
+    // Flags
+    bool acting_flag_; // Indicates that an action is being executed
 
     void joy_callback(const sensor_msgs::msg::Joy::SharedPtr msg)
     {
@@ -257,14 +260,104 @@ private:
         SE3_jog_publisher_->publish(SE3_jog_msg);
     }
 
+    void go_home()
+    {
+        // Check if action server is ready
+        if (!this->arm_motion_client_->wait_for_action_server()) {
+            RCLCPP_ERROR(this->get_logger(), "Action server not available after waiting");
+        }
+        else {
+            RCLCPP_DEBUG(this->get_logger(), "Action server ready");
+        }
+
+        auto goal_msg = hebi_msgs::action::ArmMotion::Goal();
+        trajectory_msgs::msg::JointTrajectoryPoint point;
+
+        point.positions = home_position_;
+        point.velocities = {0, 0, 0, 0, 0, 0};
+        point.accelerations = {0, 0, 0, 0, 0, 0};
+        point.time_from_start = rclcpp::Duration::from_seconds(2.0);
+        goal_msg.waypoints.points.push_back(point);
+        goal_msg.use_wp_times = true;
+        goal_msg.wp_type = hebi_msgs::action::ArmMotion::Goal::JOINT_SPACE;
+
+        RCLCPP_DEBUG(this->get_logger(), "Sending waypoints");
+
+        auto send_goal_options = rclcpp_action::Client<hebi_msgs::action::ArmMotion>::SendGoalOptions();
+        send_goal_options.goal_response_callback = std::bind(&XBoxArm::goal_response_callback, this, std::placeholders::_1);
+        send_goal_options.feedback_callback = std::bind(&XBoxArm::feedback_callback, this, std::placeholders::_1, std::placeholders::_2);
+        send_goal_options.result_callback = std::bind(&XBoxArm::result_callback, this, std::placeholders::_1);
+        
+        this->arm_motion_client_->async_send_goal(goal_msg, send_goal_options);
+    }
+
+    void goal_response_callback(const rclcpp_action::ClientGoalHandle<hebi_msgs::action::ArmMotion>::SharedPtr & goal_handle) 
+    {
+        if (!goal_handle) {
+        RCLCPP_ERROR(this->get_logger(), "Goal was rejected by server");
+        } else {
+        RCLCPP_DEBUG(this->get_logger(), "Goal accepted by server, waiting for result");
+        }
+    }
+
+    void feedback_callback(rclcpp_action::ClientGoalHandle<hebi_msgs::action::ArmMotion>::SharedPtr, const std::shared_ptr<const hebi_msgs::action::ArmMotion::Feedback> feedback) 
+    {
+        RCLCPP_DEBUG(this->get_logger(), "Percent Complete: %f", feedback->percent_complete);
+    }
+
+    void result_callback(const rclcpp_action::ClientGoalHandle<hebi_msgs::action::ArmMotion>::WrappedResult & result) 
+    {
+        switch (result.code) {
+        case rclcpp_action::ResultCode::SUCCEEDED:
+            break;
+        case rclcpp_action::ResultCode::ABORTED:
+            RCLCPP_ERROR(this->get_logger(), "Goal was aborted");
+
+            // Reset acting flag
+            acting_flag_ = false;
+            return;
+        case rclcpp_action::ResultCode::CANCELED:
+            RCLCPP_ERROR(this->get_logger(), "Goal was canceled");
+
+            // Reset acting flag
+            acting_flag_ = false;
+            return;
+        default:
+            RCLCPP_ERROR(this->get_logger(), "Unknown result code");
+
+            // Reset acting flag
+            acting_flag_ = false;
+            return;
+        }
+        RCLCPP_DEBUG(this->get_logger(), "Motion Completed");
+
+        // Reset acting flag
+        acting_flag_ = false;
+        return;
+    }
+
     void timer_callback()
     {   
         // Decide Jog values based on controller state
         process_controller();
             
+        // Re-home if START Button is pressed
+        if (controller_state_.buttons.at(7) == 1 && !acting_flag_)
+        {
+            go_home();
+            acting_flag_ = true; // Ensure's that the action is called only once when the START Button is pressed
+        }
+
         // Publish Jog Messages accordingly
-        // cartesian_jog_pub();
-        SE3_jog_pub();
+        // Publish SE(3) jog messages only when there are enough degrees of freedom
+        if (joint_names_.size() >= 6)
+        {
+            SE3_jog_pub();
+        }
+        else
+        {
+            cartesian_jog_pub();
+        }
     }
 };
 
