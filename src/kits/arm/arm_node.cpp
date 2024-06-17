@@ -559,10 +559,14 @@ private:
     Eigen::Matrix3Xd orientation(3, 1), temp_orientation(3, 1);
     Eigen::VectorXd times(1);
 
+    // World frame's X-axis is End-effector frame's Z-axis: Roll
+    // World frame's Y-axis is End-effector frame's Z-axis: Pitch
+    // World frame's Z-axis is End-effector frame's Z-axis: Yaw
+    // In our convention, yaw is global (extrinsic) and roll is local (intrinsic), with respect to the end-effector frame
     times(0) = jog_msg->duration;
-    new_orientation = Eigen::AngleAxisd(jog_msg->displacements[2], Eigen::Vector3d::UnitZ()).matrix() 
-                      * Eigen::AngleAxisd(jog_msg->displacements[1], Eigen::Vector3d::UnitY()).matrix()
-                      * cur_orientation
+    new_orientation = cur_orientation
+                      * Eigen::AngleAxisd(jog_msg->displacements[2], Eigen::Vector3d::UnitY()).matrix() 
+                      * Eigen::AngleAxisd(jog_msg->displacements[1], Eigen::Vector3d::UnitX()).matrix()
                       * Eigen::AngleAxisd(jog_msg->displacements[0], Eigen::Vector3d::UnitZ()).matrix();
 
     orientation = new_orientation.eulerAngles(0, 1, 2);
