@@ -50,9 +50,9 @@ public:
 
     RCLCPP_INFO(this->get_logger(), "Sending waypoints");
     // point.positions = {0.24, -0.2, 0.27, M_PI, M_PI/2, M_PI/2};
-    point.positions = {0.0, 2.09439, 2.09439, 0.0, M_PI/2};
-    point.velocities = {0, 0, 0, 0, 0};
-    point.accelerations = {0, 0, 0, 0, 0};
+    point.positions = {0.0, 2.09439, 2.09439, 0.0, M_PI/2, 0.0};
+    point.velocities = {0, 0, 0, 0, 0, 0};
+    point.accelerations = {0, 0, 0, 0, 0, 0};
     point.time_from_start = rclcpp::Duration::from_seconds(2.0);
     goal_msg.waypoints.points.push_back(point);
     goal_msg.use_wp_times = true;
@@ -62,9 +62,9 @@ public:
     while (t < 18.0)
     {
       t += dt;
-      point.positions = {M_PI/2.0 * cos(M_PI*t/4.0), 2.09439, 2.09439, 0.0, M_PI/2};
-      point.velocities = {-M_PI*M_PI/8.0 * sin(M_PI*t/4.0), 0.0, 0.0, 0.0, 0.0};
-      point.accelerations = {nan, nan, nan, nan, nan};
+      point.positions = {M_PI/2.0 * cos(M_PI*t/4.0), 2.09439, 2.09439, 0.0, M_PI/2, 0.0};
+      point.velocities = {-M_PI*M_PI/8.0 * sin(M_PI*t/4.0), 0.0, 0.0, 0.0, 0.0, 0.0};
+      point.accelerations = {nan, nan, nan, nan, nan, nan};
       point.time_from_start = rclcpp::Duration::from_seconds(t);
       goal_msg.waypoints.points.push_back(point);
     }

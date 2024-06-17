@@ -75,7 +75,7 @@ public:
     // Subscribers
     joint_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("joint_jog", 50, std::bind(&ArmNode::jointJogCallback, this, std::placeholders::_1));
     cartesian_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("cartesian_jog", 50, std::bind(&ArmNode::cartesianJogCallback, this, std::placeholders::_1));
-    se3_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("se3_jog", 50, std::bind(&ArmNode::se3JogCallback, this, std::placeholders::_1));
+    SE3_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("SE3_jog", 50, std::bind(&ArmNode::SE3JogCallback, this, std::placeholders::_1));
     joint_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("joint_trajectory", 50, std::bind(&ArmNode::jointWaypointsCallback, this, std::placeholders::_1));
     cartesian_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("cartesian_trajectory", 50, std::bind(&ArmNode::cartesianWaypointsCallback, this, std::placeholders::_1));
 
@@ -138,7 +138,7 @@ private:
 
   rclcpp::Subscription<control_msgs::msg::JointJog>::SharedPtr joint_jog_subscriber_;
   rclcpp::Subscription<control_msgs::msg::JointJog>::SharedPtr cartesian_jog_subscriber_;
-  rclcpp::Subscription<control_msgs::msg::JointJog>::SharedPtr se3_jog_subscriber_;
+  rclcpp::Subscription<control_msgs::msg::JointJog>::SharedPtr SE3_jog_subscriber_;
   rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr cartesian_waypoint_subscriber_;
   rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr joint_waypoint_subscriber_;
 
@@ -277,7 +277,7 @@ private:
     if (waypoint_type == ArmMotion::Goal::CARTESIAN_SPACE) {
       // Get each waypoint in cartesian space
       Eigen::Matrix3Xd xyz_positions(3, num_waypoints);
-      Eigen::Matrix3Xd orientation(3, num_waypoints);
+      Eigen::Matrix3Xd euler_angles(3, num_waypoints);
       for (size_t i = 0; i < num_waypoints; ++i) {
         if (use_traj_times) {
           wp_times(i) = goal->waypoints.points[i].time_from_start.sec + goal->waypoints.points[i].time_from_start.nanosec * 1e-9;
@@ -285,12 +285,12 @@ private:
         xyz_positions(0, i) = goal->waypoints.points[i].positions[0];
         xyz_positions(1, i) = goal->waypoints.points[i].positions[1];
         xyz_positions(2, i) = goal->waypoints.points[i].positions[2];
-        orientation(0, i) = goal->waypoints.points[i].positions[3];
-        orientation(1, i) = goal->waypoints.points[i].positions[4];
-        orientation(2, i) = goal->waypoints.points[i].positions[5];
+        euler_angles(0, i) = goal->waypoints.points[i].positions[3];
+        euler_angles(1, i) = goal->waypoints.points[i].positions[4];
+        euler_angles(2, i) = goal->waypoints.points[i].positions[5];
       }
 
-      updateCartesianWaypoints(use_traj_times, wp_times, xyz_positions, &orientation);
+      updateSE3Waypoints(use_traj_times, wp_times, xyz_positions, &euler_angles, false);
     } else if (waypoint_type == ArmMotion::Goal::JOINT_SPACE) {
       // Get each waypoint in joint space
       Eigen::MatrixXd pos(num_joints_, num_waypoints);
@@ -429,20 +429,20 @@ private:
     // Fill in an Eigen::Matrix3xd with the xyz goal
     size_t num_waypoints = target_waypoints->points.size();
     Eigen::Matrix3Xd xyz_positions(3, num_waypoints);
-    Eigen::Matrix3Xd orientation(3, num_waypoints);
+    Eigen::Matrix3Xd euler_angles(3, num_waypoints);
     Eigen::VectorXd times(num_waypoints);
     for (size_t i = 0; i < num_waypoints; ++i) {
       times(i) = target_waypoints->points[i].time_from_start.sec + target_waypoints->points[i].time_from_start.nanosec * 1e-9;
       xyz_positions(0, i) = target_waypoints->points[i].positions[0];
       xyz_positions(1, i) = target_waypoints->points[i].positions[1];
       xyz_positions(2, i) = target_waypoints->points[i].positions[2];
-      orientation(0, i) = target_waypoints->points[i].positions[3];
-      orientation(1, i) = target_waypoints->points[i].positions[4];
-      orientation(2, i) = target_waypoints->points[i].positions[5];
+      euler_angles(0, i) = target_waypoints->points[i].positions[3];
+      euler_angles(1, i) = target_waypoints->points[i].positions[4];
+      euler_angles(2, i) = target_waypoints->points[i].positions[5];
     }
 
     // Replan
-    updateCartesianWaypoints(use_traj_times_, times, xyz_positions, &orientation);
+    updateSE3Waypoints(use_traj_times_, times, xyz_positions, &euler_angles, true);
   }
 
   // "Jog" the arm along each joint
@@ -514,30 +514,28 @@ private:
     Eigen::Vector3d cur_euler = cur_orientation.eulerAngles(0, 1, 2);
 
     Eigen::Matrix3Xd xyz_positions(3, 1);
-    Eigen::Matrix3Xd orientation(3, 1);
+    Eigen::Matrix3Xd euler_angles(3, 1);
     Eigen::VectorXd times(1);
 
     times(0) = jog_msg->duration;
     xyz_positions(0, 0) = cur_pos[0] + jog_msg->displacements[0];
     xyz_positions(1, 0) = cur_pos[1] + jog_msg->displacements[1];
     xyz_positions(2, 0) = cur_pos[2] + jog_msg->displacements[2];
-    orientation(0, 0) = cur_euler[0];
-    orientation(1, 0) = cur_euler[1];
-    orientation(2, 0) = cur_euler[2];
-
-    RCLCPP_ERROR(this->get_logger(), "R: %f, P: %f, Y: %f", cur_euler[0], cur_euler[1], cur_euler[2]);
+    euler_angles(0, 0) = cur_euler[0];
+    euler_angles(1, 0) = cur_euler[1];
+    euler_angles(2, 0) = cur_euler[2];
 
     // Replan
-    updateCartesianWaypoints(use_traj_times_, times, xyz_positions, &orientation);
+    updateSE3Waypoints(use_traj_times_, times, xyz_positions, &euler_angles, true);
   }
 
   // "Jog" the target end effector location in SE(3), replanning
   // smoothly to the new location
   // First three entires are angular, and last three are linear
-  void se3JogCallback(const control_msgs::msg::JointJog::SharedPtr jog_msg) {
+  void SE3JogCallback(const control_msgs::msg::JointJog::SharedPtr jog_msg) {
 
     if (compliant_mode_) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Deactivate compliant mode to use se3 jog");
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Deactivate compliant mode to use SE(3) jog");
       return;
     }
 
@@ -552,16 +550,14 @@ private:
     Eigen::Matrix3d cur_orientation, new_orientation;
     arm_->FK(arm_->lastFeedback().getPositionCommand(), cur_pos, cur_orientation);
 
-    // Convert orientation to Euler angles
-    Eigen::Vector3d cur_euler = cur_orientation.eulerAngles(0, 1, 2);
-
     Eigen::Matrix3Xd xyz_positions(3, 1);
-    Eigen::Matrix3Xd orientation(3, 1), temp_orientation(3, 1);
+    Eigen::Matrix3Xd euler_angles(3, 1);
     Eigen::VectorXd times(1);
 
+    // Calculate the new end-effector orientation
     // World frame's X-axis is End-effector frame's Z-axis: Roll
-    // World frame's Y-axis is End-effector frame's Z-axis: Pitch
-    // World frame's Z-axis is End-effector frame's Z-axis: Yaw
+    // World frame's Y-axis is End-effector frame's X-axis: Pitch
+    // World frame's Z-axis is End-effector frame's Y-axis: Yaw
     // In our convention, yaw is global (extrinsic) and roll is local (intrinsic), with respect to the end-effector frame
     times(0) = jog_msg->duration;
     new_orientation = cur_orientation
@@ -569,14 +565,14 @@ private:
                       * Eigen::AngleAxisd(jog_msg->displacements[1], Eigen::Vector3d::UnitX()).matrix()
                       * Eigen::AngleAxisd(jog_msg->displacements[0], Eigen::Vector3d::UnitZ()).matrix();
 
-    orientation = new_orientation.eulerAngles(0, 1, 2);
+    euler_angles = new_orientation.eulerAngles(0, 1, 2);
 
     xyz_positions(0, 0) = cur_pos[0] + jog_msg->displacements[3]; // x
     xyz_positions(1, 0) = cur_pos[1] + jog_msg->displacements[4]; // y
     xyz_positions(2, 0) = cur_pos[2] + jog_msg->displacements[5]; // z
 
     // Replan
-    updateCartesianWaypoints(use_traj_times_, times, xyz_positions, &orientation);
+    updateSE3Waypoints(use_traj_times_, times, xyz_positions, &euler_angles, false);
   }
 
   /////////////////////////// UTILITY FUNCTIONS ///////////////////////////
@@ -676,9 +672,9 @@ private:
   // Replan a smooth joint trajectory from the current location through a
   // series of cartesian waypoints.
   // xyz positions should be a 3xn vector of target positions
-  void updateCartesianWaypoints(const bool use_traj_times, const Eigen::VectorXd& times, const Eigen::Matrix3Xd& xyz_positions, const Eigen::Matrix3Xd* orientation = nullptr) {
+  void updateSE3Waypoints(const bool use_traj_times, const Eigen::VectorXd& times, const Eigen::Matrix3Xd& xyz_positions, const Eigen::Matrix3Xd* euler_angles = nullptr, const bool pureCartesian = false) {
     // Data sanity check:
-    if (orientation && orientation->cols() != xyz_positions.cols())
+    if (euler_angles && euler_angles->cols() != xyz_positions.cols())
       return;
 
     // These are the joint angles that will be added
@@ -693,20 +689,29 @@ private:
       last_position = ik_seed_;
     }
 
+    int min_num_joints = 6;
+    if(pureCartesian)
+    {
+      min_num_joints = 3;
+    }
+
     // For each waypoint, find the joint angles to move to it, starting from the last
     // waypoint, and save into the position vector.
-    if (orientation && num_joints_ >= 6) {
+    if (euler_angles && num_joints_ >= min_num_joints) {
       // If we are given tip directions, add these too...
       for (size_t i = 0; i < num_waypoints; ++i) {
 
-        // Covert orientation to a 3x3 rotation matrix
+        // Covert euler angles to a 3x3 rotation matrix
         Eigen::Matrix3d rotation_matrix;
 
-        // Yaw -> Pitch -> Roll
-        // Roll is in the global frame
-        rotation_matrix = Eigen::AngleAxisd(orientation->col(i)[0], Eigen::Vector3d::UnitX()).matrix()
-                        * Eigen::AngleAxisd(orientation->col(i)[1], Eigen::Vector3d::UnitY()).matrix()
-                        * Eigen::AngleAxisd(orientation->col(i)[2], Eigen::Vector3d::UnitZ()).matrix();
+        // Following Eigen's convention: 
+        // Yaw(Z) (locally) → Pitch(Y) (locally) → Roll(X) (locally)
+        // which is equivalent to:
+        // Roll(X) (globally) → Pitch(Y) (globally) → Yaw(Z) (globally) 
+        // Roll is extrinsic, and yaw is intrinsic
+        rotation_matrix = Eigen::AngleAxisd(euler_angles->col(i)[0], Eigen::Vector3d::UnitX()).matrix()
+                        * Eigen::AngleAxisd(euler_angles->col(i)[1], Eigen::Vector3d::UnitY()).matrix()
+                        * Eigen::AngleAxisd(euler_angles->col(i)[2], Eigen::Vector3d::UnitZ()).matrix();
 
         last_position = arm_->solveIK(last_position, xyz_positions.col(i), rotation_matrix);
 

@@ -76,7 +76,7 @@ public:
         // Publishers
         joint_jog_publisher_ = this->create_publisher<control_msgs::msg::JointJog>("joint_jog", 50);
         cartesian_jog_publisher_ = this->create_publisher<control_msgs::msg::JointJog>("cartesian_jog", 50);
-        se3_jog_publisher_ = this->create_publisher<control_msgs::msg::JointJog>("se3_jog", 50);
+        SE3_jog_publisher_ = this->create_publisher<control_msgs::msg::JointJog>("SE3_jog", 50);
 
         // Subscribers
         joy_subscriber_ = this->create_subscription<sensor_msgs::msg::Joy>(
@@ -92,7 +92,7 @@ private:
     rclcpp::TimerBase::SharedPtr timer_;
     rclcpp::Publisher<control_msgs::msg::JointJog>::SharedPtr joint_jog_publisher_;
     rclcpp::Publisher<control_msgs::msg::JointJog>::SharedPtr cartesian_jog_publisher_;
-    rclcpp::Publisher<control_msgs::msg::JointJog>::SharedPtr se3_jog_publisher_;
+    rclcpp::Publisher<control_msgs::msg::JointJog>::SharedPtr SE3_jog_publisher_;
     rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_subscriber_;
 
     // Initialize controller state
@@ -111,7 +111,7 @@ private:
     double x_vel_gain_ = 0.002;
     double y_vel_gain_ = 0.002;
     double z_vel_gain_ = 0.002;
-    double roll_vel_gain_ = 0.02;
+    double roll_vel_gain_ = 0.03;
     double pitch_vel_gain_ = 0.015;
     double yaw_vel_gain_ = 0.015;
 
@@ -170,9 +170,13 @@ private:
         }
 
         // Pitch up (+Y) and down (-Y) through Right Joystick
-        pitch_vel_ = -pitch_vel_gain_ * controller_state_.axes.at(4);
+        // Invert controls
+        // pitch_vel_ = -pitch_vel_gain_ * controller_state_.axes.at(4);
+        pitch_vel_ += low_pass_admittance_ * (-pitch_vel_gain_ * controller_state_.axes.at(4) - pitch_vel_);
 
-        yaw_vel_ = -yaw_vel_gain_ * -controller_state_.axes.at(3);
+        // Yaw left (+Z) and right (-Z) through Right Joystick
+        // Invert controls
+        yaw_vel_ += low_pass_admittance_ * (-yaw_vel_gain_ * -controller_state_.axes.at(3) - yaw_vel_);
     }
 
     void joint_jog_pub()
@@ -191,8 +195,6 @@ private:
         {
             joint_jog_msg.displacements.push_back(0.0);
         }
-        joint_jog_msg.displacements.at(3) = pitch_vel_;
-        joint_jog_msg.displacements.at(4) = yaw_vel_;
 
         // Velocities should be the same dimension as number of joints
         for (size_t joint_idx = 0; joint_idx < joint_jog_msg.joint_names.size(); joint_idx++)
@@ -235,42 +237,42 @@ private:
         cartesian_jog_publisher_->publish(cartesian_jog_msg);
     }
 
-    void se3_jog_pub()
+    void SE3_jog_pub()
     {
         // Initialize SE(3) Jog Message
-        control_msgs::msg::JointJog se3_jog_msg;
+        control_msgs::msg::JointJog SE3_jog_msg;
 
-        se3_jog_msg.header.stamp = get_clock()->now();
-        se3_jog_msg.header.frame_id = "";
-        se3_jog_msg.duration = 1.0/rate; // seconds
+        SE3_jog_msg.header.stamp = get_clock()->now();
+        SE3_jog_msg.header.frame_id = "";
+        SE3_jog_msg.duration = 1.0/rate; // seconds
 
-        se3_jog_msg.joint_names = {"roll", "pitch", "yaw", "x", "y", "z"};
+        SE3_jog_msg.joint_names = {"roll", "pitch", "yaw", "x", "y", "z"};
 
         // Displacements
-        for (size_t dof_idx = 0; dof_idx < se3_jog_msg.joint_names.size(); dof_idx++)
+        for (size_t dof_idx = 0; dof_idx < SE3_jog_msg.joint_names.size(); dof_idx++)
         {
-            se3_jog_msg.displacements.push_back(0.0);
+            SE3_jog_msg.displacements.push_back(0.0);
         }
-        se3_jog_msg.displacements.at(0) = roll_vel_;
-        se3_jog_msg.displacements.at(1) = pitch_vel_;
-        se3_jog_msg.displacements.at(2) = yaw_vel_;
-        se3_jog_msg.displacements.at(3) = x_vel_;
-        se3_jog_msg.displacements.at(4) = y_vel_;
-        se3_jog_msg.displacements.at(5) = z_vel_;
+        SE3_jog_msg.displacements.at(0) = roll_vel_;
+        SE3_jog_msg.displacements.at(1) = pitch_vel_;
+        SE3_jog_msg.displacements.at(2) = yaw_vel_;
+        SE3_jog_msg.displacements.at(3) = x_vel_;
+        SE3_jog_msg.displacements.at(4) = y_vel_;
+        SE3_jog_msg.displacements.at(5) = z_vel_;
 
         // Velocities should be the same dimension as number of dof
-        for (size_t dof_idx = 0; dof_idx < se3_jog_msg.joint_names.size(); dof_idx++)
+        for (size_t dof_idx = 0; dof_idx < SE3_jog_msg.joint_names.size(); dof_idx++)
         {
-            se3_jog_msg.velocities.push_back(0.0);
+            SE3_jog_msg.velocities.push_back(0.0);
         }
-        se3_jog_msg.velocities.at(0) = roll_vel_;
-        se3_jog_msg.velocities.at(1) = pitch_vel_;
-        se3_jog_msg.velocities.at(2) = yaw_vel_;
-        se3_jog_msg.velocities.at(3) = x_vel_;
-        se3_jog_msg.velocities.at(4) = y_vel_;
-        se3_jog_msg.velocities.at(5) = z_vel_;
+        SE3_jog_msg.velocities.at(0) = roll_vel_;
+        SE3_jog_msg.velocities.at(1) = pitch_vel_;
+        SE3_jog_msg.velocities.at(2) = yaw_vel_;
+        SE3_jog_msg.velocities.at(3) = x_vel_;
+        SE3_jog_msg.velocities.at(4) = y_vel_;
+        SE3_jog_msg.velocities.at(5) = z_vel_;
 
-        se3_jog_publisher_->publish(se3_jog_msg);
+        SE3_jog_publisher_->publish(SE3_jog_msg);
     }
 
     void timer_callback()
@@ -280,7 +282,7 @@ private:
             
         // Publish Jog Messages accordingly
         // cartesian_jog_pub();
-        se3_jog_pub();
+        SE3_jog_pub();
     }
 };
 
