@@ -1,4 +1,4 @@
-arm_node:
+/**:
   ros__parameters:
     names: [ "J1_base", "J2_shoulder", "J3_elbow", "J4_wrist1", "J5_wrist2", "J6_wrist3" ]
     families: [ "HEBIArm" ]
@@ -6,8 +6,4 @@ arm_node:
     gains_file: "config/gains/A-2085-06_gains.xml"
     hrdf_package: "hebi_description"
     hrdf_file: "config/hrdf/A-2085-06.hrdf"
-    # home_position: [ 0.0, 2.09439, 2.09439, 0.0, 3.141593, 3.141593]
-    # home_position: [ 0.0, 2.09439, 2.09439, 0.0, 1.57079, 0.0]
-    # home_position: [ 0.0, 2.09439, 2.09439, 0.0, 3.141593, 0.0]
-
     home_position: [ 0.0, 2.09439, 2.09439, 0.0, 1.57079, 0.0]

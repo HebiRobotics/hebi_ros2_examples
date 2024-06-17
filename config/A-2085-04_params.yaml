@@ -1,4 +1,4 @@
-arm_node:
+/**:
   ros__parameters:
     names: [ "J1_base", "J2_shoulder", "J3_elbow", "J4_wrist1" ]
     families: [ "Arm" ]

@@ -7,6 +7,7 @@
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <geometry_msgs/msg/inertia.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <hebi_msgs/action/arm_motion.hpp>
 
 #include "hebi_cpp_api/group_command.hpp"
@@ -98,7 +99,7 @@ public:
       return;
     }
 
-    timer_ = this->create_wall_timer(std::chrono::milliseconds(10), std::bind(&ArmNode::publishState, this));
+    timer_ = this->create_wall_timer(std::chrono::milliseconds(5), std::bind(&ArmNode::publishState, this));
 
     // Go to home position
     try {
@@ -109,6 +110,13 @@ public:
       RCLCPP_ERROR(this->get_logger(), "Could not go to home position: %s", e.what());
       return;
     }
+
+    // Raise homed flag only after it reaches the home position
+    while (!arm_->atGoal() && rclcpp::ok()) {
+      update();
+    }  
+    homed_flag_ = true;
+    RCLCPP_INFO(this->get_logger(), "Reached home position");
   }
 
   void update() {
@@ -123,6 +131,8 @@ public:
 private:
 
   std::unique_ptr<arm::Arm> arm_;
+
+  bool homed_flag_ = false;
 
   bool compliant_mode_{false};
   Eigen::VectorXd home_position_;
@@ -146,9 +156,9 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::Inertia>::SharedPtr center_of_mass_publisher_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr end_effector_pose_publisher_;
 
-  rclcpp::TimerBase::SharedPtr timer_;
-
   rclcpp_action::Server<hebi_msgs::action::ArmMotion>::SharedPtr action_server_;
+
+  rclcpp::TimerBase::SharedPtr timer_;
 
   std::shared_ptr<rclcpp::ParameterEventHandler> parameter_event_handler_;
   std::shared_ptr<rclcpp::ParameterCallbackHandle> ik_seed_callback_handle_;
@@ -448,6 +458,9 @@ private:
   // "Jog" the arm along each joint
   void jointJogCallback(const control_msgs::msg::JointJog::SharedPtr jog_msg) {
 
+    if (!homed_flag_)
+      return;
+
     if (compliant_mode_) {
       RCLCPP_ERROR_STREAM(this->get_logger(), "Deactivate compliant mode to use joint jog");
       return;
@@ -494,6 +507,9 @@ private:
   // smoothly to the new location
   void cartesianJogCallback(const control_msgs::msg::JointJog::SharedPtr jog_msg) {
 
+    if (!homed_flag_)
+      return;
+
     if (compliant_mode_) {
       RCLCPP_ERROR_STREAM(this->get_logger(), "Deactivate compliant mode to use cartesian jog");
       return;
@@ -533,6 +549,9 @@ private:
   // smoothly to the new location
   // First three entires are angular, and last three are linear
   void SE3JogCallback(const control_msgs::msg::JointJog::SharedPtr jog_msg) {
+
+    if (!homed_flag_)
+      return;
 
     if (compliant_mode_) {
       RCLCPP_ERROR_STREAM(this->get_logger(), "Deactivate compliant mode to use SE(3) jog");
@@ -926,7 +945,6 @@ int main(int argc, char ** argv) {
   while (rclcpp::ok()) {
 
     node->update();
-
     // Call any pending callbacks (note -- this may update our planned motion)
     rclcpp::spin_some(node);
   }

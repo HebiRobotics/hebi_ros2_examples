@@ -109,6 +109,25 @@ def generate_launch_description():
     namespace=prefix,
   )
 
+  xbox_arm = Node(
+    package='hebi_ros2_examples',
+    executable='xbox_arm',
+    name='xbox_arm',
+    output='screen',
+    parameters=[
+      robot_params,
+      {"prefix": prefix}
+    ],
+    namespace=prefix,
+  )
+
+  joy_node = Node(
+        package="joy",
+        executable="joy_node",
+        name="joy_node",
+        output="screen"
+    )
+
   rviz_config_file = PathJoinSubstitution(
     [FindPackageShare(description_package), "rviz", "hebi_arm.rviz"]
   )
@@ -127,6 +146,8 @@ def generate_launch_description():
     [
       robot_state_publisher_node,
       arm_node,
+      xbox_arm,
+      joy_node,
       rviz_node
     ]
   )

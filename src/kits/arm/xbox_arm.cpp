@@ -4,6 +4,7 @@
 
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 #include <sensor_msgs/msg/joy.hpp>
+#include <std_msgs/msg/bool.hpp>
 
 #include <hebi_msgs/action/arm_motion.hpp>
 
@@ -24,41 +25,23 @@ public:
   
   XBoxArm() : Node("xbox_arm") {
 
-        // TODO : Parameter retrieval
         // Read parameters from robot's yaml
-        // this->declare_parameter("names", rclcpp::PARAMETER_STRING_ARRAY);
-        // this->declare_parameter("families", rclcpp::PARAMETER_STRING_ARRAY);
-        // this->declare_parameter("gains_package", rclcpp::PARAMETER_STRING);
-        // this->declare_parameter("gains_file", rclcpp::PARAMETER_STRING);
-        // this->declare_parameter("hrdf_package", rclcpp::PARAMETER_STRING);
-        // this->declare_parameter("hrdf_file", rclcpp::PARAMETER_STRING);
-        // this->declare_parameter("home_position", rclcpp::PARAMETER_DOUBLE_ARRAY);
-        // this->declare_parameter("ik_seed", rclcpp::PARAMETER_DOUBLE_ARRAY);
-        // this->declare_parameter("prefix", "");
-        // this->declare_parameter("use_traj_times", true);
+        this->declare_parameter("names", rclcpp::PARAMETER_STRING_ARRAY);
+        this->declare_parameter("families", rclcpp::PARAMETER_STRING_ARRAY);
+        this->declare_parameter("home_position", rclcpp::PARAMETER_DOUBLE_ARRAY);
+        this->declare_parameter("prefix", "");
 
-        // get_parameter("names", joint_names_);
-        // // get_parameter("home_position", home_position_);
+        if (this->has_parameter("home_position")) {
+            this->get_parameter("home_position", home_position_);
+        } else {
+            RCLCPP_WARN(this->get_logger(), "Could not find/read 'home_position' parameter; defaulting to all zeros!");
+        }
 
-        // home_position_ = get_parameter("home_position").get_parameter_value().get<std::vector<double>>();
-
-        // if (this->has_parameter("home_position")) {
-        // this->get_parameter("home_position", home_position_);
-        // RCLCPP_INFO(this->get_logger(), "Found and successfully read 'home_position' parameter");
-        // } else {
-        // RCLCPP_WARN(this->get_logger(), "Could not find/read 'home_position' parameter; defaulting to all zeros!");
-        // }
-
-        // RCLCPP_INFO(this->get_logger(), "%s, %ld", joint_names_.at(0), joint_names_.size());
-        // RCLCPP_INFO(this->get_logger(), "%f, %ld", home_position_.at(0), home_position_.size());
-        // RCLCPP_INFO(this->get_logger(), "%ld", home_position_.size());
-
-        joint_names_.push_back("J1_base");
-        joint_names_.push_back("J2_shoulder");
-        joint_names_.push_back("J3_elbow");
-        joint_names_.push_back("J4_wrist1");
-        joint_names_.push_back("J5_wrist2");
-        joint_names_.push_back("J6_wrist3");
+        if (this->has_parameter("names")) {
+            this->get_parameter("names", joint_names_);
+        } else {
+            RCLCPP_WARN(this->get_logger(), "Could not find/read 'names' parameter; defaulting to all zeros!");
+        }
 
         // Initialize axes vector
         std::vector<float> axes_0 = {-0.0f, -0.0f, 1.0f, -0.0f, -0.0f, 1.0f, 0.0f, 0.0f};
@@ -82,7 +65,7 @@ public:
         joy_subscriber_ = this->create_subscription<sensor_msgs::msg::Joy>(
         "joy", 10, std::bind(&XBoxArm::joy_callback, this, std::placeholders::_1));
 
-        RCLCPP_INFO(this->get_logger(), "Initialized");
+        RCLCPP_INFO(this->get_logger(), "Started X-Box arm controller");
     }
 
 private:
@@ -101,6 +84,7 @@ private:
     std::vector<std::string> joint_names_;
     std::vector<double> home_position_;
 
+    // Initialize SE(3) velocities
     double x_vel_ = 0.0;
     double y_vel_ = 0.0;
     double z_vel_ = 0.0;
@@ -108,6 +92,7 @@ private:
     double pitch_vel_ = 0.0;
     double yaw_vel_ = 0.0;
 
+    // Initialize tuned gain values for velocities
     double x_vel_gain_ = 0.002;
     double y_vel_gain_ = 0.002;
     double z_vel_gain_ = 0.002;
@@ -115,9 +100,7 @@ private:
     double pitch_vel_gain_ = 0.015;
     double yaw_vel_gain_ = 0.015;
 
-    double pitch_max_ = M_PI / 2.0;
-    double pitch_pos_ = 0.0;
-
+    // Initialize tuned admittance value for low pass filtering
     double low_pass_admittance_ = 0.05;
 
     void joy_callback(const sensor_msgs::msg::Joy::SharedPtr msg)
@@ -171,7 +154,6 @@ private:
 
         // Pitch up (+Y) and down (-Y) through Right Joystick
         // Invert controls
-        // pitch_vel_ = -pitch_vel_gain_ * controller_state_.axes.at(4);
         pitch_vel_ += low_pass_admittance_ * (-pitch_vel_gain_ * controller_state_.axes.at(4) - pitch_vel_);
 
         // Yaw left (+Z) and right (-Z) through Right Joystick
