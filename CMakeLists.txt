@@ -69,9 +69,6 @@ ament_target_dependencies(xbox_arm
   trajectory_msgs
   hebi_msgs
   geometry_msgs
-  moveit_msgs
-  moveit_ros_planning_interface
-  moveit_visual_tools
   hebi_cpp_api
   hebi_msgs
   control_msgs
@@ -152,12 +149,12 @@ install(TARGETS
   diff_drive_node
   hexapod_control
   treaded_base_node
+  xbox_arm
   DESTINATION lib/${PROJECT_NAME})
 
 if(moveit_ros_planning_interface_FOUND)
   install(TARGETS
     move_arm
-    xbox_arm
     DESTINATION lib/${PROJECT_NAME})
 endif()
 
