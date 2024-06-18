@@ -91,15 +91,15 @@ public:
     Eigen::VectorXd efforts = hexapod_->getLastEffort();
 
     feedback_msg_.position.resize(positions.size());
-    for (size_t i = 0; i < positions.size(); ++i)
+    for (size_t i = 0; i < static_cast<size_t>(positions.size()); ++i)
       feedback_msg_.position[i] = positions[i];
 
     feedback_msg_.velocity.resize(velocities.size());
-    for (size_t i = 0; i < velocities.size(); ++i)
+    for (size_t i = 0; i < static_cast<size_t>(velocities.size()); ++i)
       feedback_msg_.velocity[i] = velocities[i];
 
     feedback_msg_.effort.resize(efforts.size());
-    for (size_t i = 0; i < efforts.size(); ++i)
+    for (size_t i = 0; i < static_cast<size_t>(efforts.size()); ++i)
       feedback_msg_.effort[i] = efforts[i];
 
     feedback_publisher_->publish(feedback_msg_);

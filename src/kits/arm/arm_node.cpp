@@ -316,9 +316,9 @@ private:
           wp_times(i) = goal->waypoints.points[i].time_from_start.sec + goal->waypoints.points[i].time_from_start.nanosec * 1e-9;
         }
         
-        if (goal->waypoints.points[i].positions.size() != num_joints_ ||
-            goal->waypoints.points[i].velocities.size() != num_joints_ ||
-            goal->waypoints.points[i].accelerations.size() != num_joints_) {
+        if (goal->waypoints.points[i].positions.size() != static_cast<size_t>(num_joints_) ||
+            goal->waypoints.points[i].velocities.size() != static_cast<size_t>(num_joints_) ||
+            goal->waypoints.points[i].accelerations.size() != static_cast<size_t>(num_joints_)) {
           RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - Position, velocity, and acceleration sizes not correct for waypoint index");
           result->success = false;
           goal_handle->abort(result);
@@ -328,7 +328,7 @@ private:
           return;
         }
 
-        for (size_t j = 0; j < num_joints_; ++j) {
+        for (size_t j = 0; j < static_cast<size_t>(num_joints_); ++j) {
           pos(j, i) = goal->waypoints.points[i].positions[j];
           vel(j, i) = goal->waypoints.points[i].velocities[j];
           accel(j, i) = goal->waypoints.points[i].accelerations[j];
@@ -416,9 +416,9 @@ private:
     for (size_t waypoint = 0; waypoint < num_waypoints; ++waypoint) {
       auto& cmd_waypoint = joint_trajectory->points[waypoint];
 
-      if (cmd_waypoint.positions.size() != num_joints_ ||
-          cmd_waypoint.velocities.size() != num_joints_ ||
-          cmd_waypoint.accelerations.size() != num_joints_) {
+      if (cmd_waypoint.positions.size() != static_cast<size_t>(num_joints_) ||
+          cmd_waypoint.velocities.size() != static_cast<size_t>(num_joints_) ||
+          cmd_waypoint.accelerations.size() != static_cast<size_t>(num_joints_)) {
         RCLCPP_ERROR_STREAM(this->get_logger(), "Position, velocity, and acceleration sizes not correct for waypoint index " << waypoint);
         return;
       }
@@ -427,7 +427,7 @@ private:
         RCLCPP_WARN_STREAM(this->get_logger(), "Effort commands in trajectories not supported; ignoring");
       }
 
-      for (size_t joint = 0; joint < num_joints_; ++joint) {
+      for (size_t joint = 0; joint < static_cast<size_t>(num_joints_); ++joint) {
         pos(joint, waypoint) = cmd_waypoint.positions[joint];
         vel(joint, waypoint) = cmd_waypoint.velocities[joint];
         accel(joint, waypoint) = cmd_waypoint.accelerations[joint];
@@ -486,7 +486,7 @@ private:
       RCLCPP_WARN_STREAM(this->get_logger(), "No velocities specified... Assuming zero velocity");
       inc_vel = false;
     } 
-    else if (jog_msg->velocities.size() != num_joints_) {
+    else if (jog_msg->velocities.size() != static_cast<size_t>(num_joints_)) {
       RCLCPP_WARN_STREAM(this->get_logger(), "Velocities size not matching number of joints... Ignoring!");
       inc_vel = false;
     }
@@ -499,12 +499,12 @@ private:
     Eigen::MatrixXd accel(num_joints_, 1);
     Eigen::VectorXd times(1);
 
-    if (jog_msg->displacements.size() != num_joints_) {
+    if (jog_msg->displacements.size() != static_cast<size_t>(num_joints_)) {
       RCLCPP_ERROR_STREAM(this->get_logger(), "Displacement size not correct");
       return;
     }
 
-    for (size_t joint = 0; joint < num_joints_; ++joint) {
+    for (size_t joint = 0; joint < static_cast<size_t>(num_joints_); ++joint) {
       pos(joint, 0) = jog_msg->displacements[joint] + cur_pos[joint];
       if (inc_vel)
         vel(joint, 0) = jog_msg->velocities[joint];
@@ -657,7 +657,7 @@ private:
 
     center_of_mass_message_.m = 0.0;
     Eigen::Vector3d weighted_sum_com = Eigen::Vector3d::Zero();
-    for(int i = 0; i < model.getFrameCount(robot_model::FrameType::CenterOfMass); ++i) {
+    for(size_t i = 0; i < model.getFrameCount(robot_model::FrameType::CenterOfMass); ++i) {
       center_of_mass_message_.m += masses(i);
       frames[i] *= masses(i);
       weighted_sum_com(0) += frames[i](0, 3);
@@ -675,7 +675,7 @@ private:
 
   void setColor(const Color& color) {
     auto& command = arm_->pendingCommand();
-    for (int i = 0; i < command.size(); ++i) {
+    for (size_t i = 0; i < command.size(); ++i) {
       command[i].led().set(color);
     }
   }
@@ -683,12 +683,12 @@ private:
   // Each row is a separate joint; each column is a separate waypoint.
   void updateJointWaypoints(const bool use_traj_times, const Eigen::VectorXd& times, const Eigen::MatrixXd& angles, const Eigen::MatrixXd& velocities, const Eigen::MatrixXd& accelerations) {
     // Data sanity check:
-    if (angles.rows() != velocities.rows()       || // Number of joints
-        angles.rows() != accelerations.rows()    ||
-        angles.rows() != arm_->size() ||
-        angles.cols() != velocities.cols()       || // Number of waypoints
-        angles.cols() != accelerations.cols()    ||
-        angles.cols() != times.size()            ||
+    if (angles.rows() != velocities.rows()                    || // Number of joints
+        angles.rows() != accelerations.rows()                 ||
+        angles.rows() != static_cast<long int>(arm_->size())  ||
+        angles.cols() != velocities.cols()                    || // Number of waypoints
+        angles.cols() != accelerations.cols()                 ||
+        angles.cols() != times.size()                         ||
         angles.cols() == 0) {
       RCLCPP_ERROR(this->get_logger(), "Angles, velocities, accelerations, or times were not the correct size");
       return;
@@ -733,7 +733,7 @@ private:
     // waypoint, and save into the position vector.
     if (euler_angles && num_joints_ >= min_num_joints) {
       // If we are given tip directions, add these too...
-      for (size_t i = 0; i < num_waypoints; ++i) {
+      for (size_t i = 0; i < static_cast<size_t>(num_waypoints); ++i) {
 
         // Covert euler angles to a 3x3 rotation matrix
         Eigen::Matrix3d rotation_matrix;
@@ -769,7 +769,7 @@ private:
         positions.col(i) = last_position;
       }
     } else {
-      for (size_t i = 0; i < num_waypoints; ++i) {
+      for (size_t i = 0; i < static_cast<size_t>(num_waypoints); ++i) {
         last_position = arm_->solveIK(last_position, xyz_positions.col(i));
         positions.col(i) = last_position;
       }
@@ -868,14 +868,14 @@ private:
     }
     home_position_ = Eigen::VectorXd(arm_->size());
     if (home_position_vector.empty()) {
-      for (size_t i = 0; i < home_position_.size(); ++i) {
+      for (size_t i = 0; i < static_cast<size_t>(home_position_.size()); ++i) {
         home_position_[i] = 0.01; // Avoid common singularities by being slightly off from zero
       }
     } else if (home_position_vector.size() != arm_->size()) {
       RCLCPP_ERROR(this->get_logger(), "'home_position' parameter not the same length as HRDF file's number of DoF! Aborting!");
       return false;
     } else {
-      for (size_t i = 0; i < home_position_.size(); ++i) {
+      for (size_t i = 0; i < static_cast<size_t>(home_position_.size()); ++i) {
         home_position_[i] = home_position_vector[i];
       }
     }
