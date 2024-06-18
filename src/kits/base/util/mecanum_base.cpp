@@ -273,11 +273,11 @@ bool MecanumBase::update(double time) {
   } else if (mstop_reset) {
     std::cout << "M-Stop Released, resending control strategy" << std::endl;
     // restore saved command strategy, since it's been cleared by M-stop
-    for (int i=0; i < command_.size(); ++i) 
+    for (size_t i = 0; i < command_.size(); ++i) 
       command_[i].settings().actuator().controlStrategy().set(strategy_);
   // don't send a command strategy the rest of the time
   } else if (command_[0].settings().actuator().controlStrategy().has()){
-    for (int i=0; i < command_.size(); ++i) 
+    for (size_t i = 0; i < command_.size(); ++i) 
       command_[i].settings().actuator().controlStrategy().clear();
   }
   last_state = mstop_state;
