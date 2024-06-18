@@ -62,7 +62,7 @@ This step is sufficient if you want to control the arm directly with our `arm_no
 
 The configuration file takes the following form:
 ```
-arm_node:
+/**:
   ros__parameters:
     names:
     families:
@@ -88,7 +88,7 @@ The parameters are defined as follows -
 
 The configuration file for HEBI Arm A-2085-05 is given below.
 ```
-arm_node:
+/**:
   ros__parameters:
     names: [ "J1_base", "J2_shoulder", "J3_elbow", "J4_wrist1", "J5_wrist2" ]
     families: [ "HEBI" ]
