@@ -62,8 +62,8 @@ public:
     while (t < 18.0)
     {
       t += dt;
-      point.positions = {M_PI/2.0 * sin(M_PI*t/4.0), 2.09439, 2.09439, 0.0, M_PI/2, 0.0};
-      point.velocities = {M_PI*M_PI/8.0 * cos(M_PI*t/4.0), 0.0, 0.0, 0.0, 0.0, 0.0};
+      point.positions = {M_PI/2.0 * cos(M_PI*t/4.0), 2.09439, 2.09439, 0.0, M_PI/2, 0.0};
+      point.velocities = {-M_PI*M_PI/8.0 * sin(M_PI*t/4.0), 0.0, 0.0, 0.0, 0.0, 0.0};
       point.accelerations = {nan, nan, nan, nan, nan, nan};
       point.time_from_start = rclcpp::Duration::from_seconds(t);
       goal_msg.waypoints.points.push_back(point);

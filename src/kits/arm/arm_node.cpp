@@ -7,6 +7,7 @@
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <geometry_msgs/msg/inertia.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <hebi_msgs/action/arm_motion.hpp>
 
 #include "hebi_cpp_api/group_command.hpp"
@@ -26,6 +27,32 @@ public:
   
   ArmNode() : Node("arm_node") {
 
+    // Parameter Description
+    auto names_des = rcl_interfaces::msg::ParameterDescriptor{};
+    auto families_des = rcl_interfaces::msg::ParameterDescriptor{};
+    auto gains_package_des = rcl_interfaces::msg::ParameterDescriptor{};
+    auto gains_file_des = rcl_interfaces::msg::ParameterDescriptor{};
+    auto hrdf_package_des = rcl_interfaces::msg::ParameterDescriptor{};
+    auto hrdf_file_des = rcl_interfaces::msg::ParameterDescriptor{};
+    auto home_position_des = rcl_interfaces::msg::ParameterDescriptor{};
+    auto ik_seed_des = rcl_interfaces::msg::ParameterDescriptor{};
+    auto prefix_des = rcl_interfaces::msg::ParameterDescriptor{};
+    auto use_traj_times_des = rcl_interfaces::msg::ParameterDescriptor{};
+    auto compliant_mode_des = rcl_interfaces::msg::ParameterDescriptor{};
+
+    names_des.description = "Array of Names of the HEBI Modules";
+    families_des.description = "Array of Families of HEBI Modules";
+    gains_package_des.description = "ROS package containing the gains file for your HEBI arm";
+    gains_file_des.description = "Relative path of the gains file from the gains_package";
+    hrdf_package_des.description = "ROS package containing the HRDF file for your HEBI arm";
+    hrdf_file_des.description = "Relative path of the HRDF file from the hrdf_package";
+    home_position_des.description = "Array of float values to move your arm after initialization.";
+    ik_seed_des.description = "Seed for inverse kinematics. Can be changed during runtime.";
+    prefix_des.description = "";
+    use_traj_times_des.description = "";
+    compliant_mode_des.description = "No arm motion can be commanded in compliant mode. Can be changed during runtime.";
+
+    // Declare default parameter values
     this->declare_parameter("names", rclcpp::PARAMETER_STRING_ARRAY);
     this->declare_parameter("families", rclcpp::PARAMETER_STRING_ARRAY);
     this->declare_parameter("gains_package", rclcpp::PARAMETER_STRING);
@@ -49,11 +76,12 @@ public:
     // Subscribers
     joint_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("joint_jog", 50, std::bind(&ArmNode::jointJogCallback, this, std::placeholders::_1));
     cartesian_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("cartesian_jog", 50, std::bind(&ArmNode::cartesianJogCallback, this, std::placeholders::_1));
+    SE3_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("SE3_jog", 50, std::bind(&ArmNode::SE3JogCallback, this, std::placeholders::_1));
     joint_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("joint_trajectory", 50, std::bind(&ArmNode::jointWaypointsCallback, this, std::placeholders::_1));
     cartesian_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("cartesian_trajectory", 50, std::bind(&ArmNode::cartesianWaypointsCallback, this, std::placeholders::_1));
 
     // Publishers
-    arm_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("joint_states", 50);
+    arm_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("fdbk_joint_states", 50);
     center_of_mass_publisher_ = this->create_publisher<geometry_msgs::msg::Inertia>("inertia", 50);
     end_effector_pose_publisher_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("ee_pose", 50);
     
@@ -71,7 +99,7 @@ public:
       return;
     }
 
-    timer_ = this->create_wall_timer(std::chrono::milliseconds(10), std::bind(&ArmNode::publishState, this));
+    timer_ = this->create_wall_timer(std::chrono::milliseconds(5), std::bind(&ArmNode::publishState, this));
 
     // Go to home position
     try {
@@ -82,6 +110,13 @@ public:
       RCLCPP_ERROR(this->get_logger(), "Could not go to home position: %s", e.what());
       return;
     }
+
+    // Raise homed flag only after it reaches the home position
+    while (!arm_->atGoal() && rclcpp::ok()) {
+      update();
+    }  
+    homed_flag_ = true;
+    RCLCPP_INFO(this->get_logger(), "Reached home position");
   }
 
   void update() {
@@ -97,6 +132,9 @@ private:
 
   std::unique_ptr<arm::Arm> arm_;
 
+  bool homed_flag_ = false; // Indicates that the end-effector has been homed initially
+  bool acting_flag_ = false; // Indicates that an action is being executed
+
   bool compliant_mode_{false};
   Eigen::VectorXd home_position_;
   int num_joints_;
@@ -111,6 +149,7 @@ private:
 
   rclcpp::Subscription<control_msgs::msg::JointJog>::SharedPtr joint_jog_subscriber_;
   rclcpp::Subscription<control_msgs::msg::JointJog>::SharedPtr cartesian_jog_subscriber_;
+  rclcpp::Subscription<control_msgs::msg::JointJog>::SharedPtr SE3_jog_subscriber_;
   rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr cartesian_waypoint_subscriber_;
   rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr joint_waypoint_subscriber_;
 
@@ -118,9 +157,9 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::Inertia>::SharedPtr center_of_mass_publisher_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr end_effector_pose_publisher_;
 
-  rclcpp::TimerBase::SharedPtr timer_;
-
   rclcpp_action::Server<hebi_msgs::action::ArmMotion>::SharedPtr action_server_;
+
+  rclcpp::TimerBase::SharedPtr timer_;
 
   std::shared_ptr<rclcpp::ParameterEventHandler> parameter_event_handler_;
   std::shared_ptr<rclcpp::ParameterCallbackHandle> ik_seed_callback_handle_;
@@ -228,6 +267,9 @@ private:
   void startArmMotion(const std::shared_ptr<GoalHandleArmMotion> goal_handle) {
     RCLCPP_INFO(this->get_logger(), "Executing arm motion action");
     
+    // Acting flag should remain true while any action is being executed
+    acting_flag_ = true;
+
     // Wait until the action is complete, sending status/feedback along the way.
     rclcpp::Rate r(10);
 
@@ -249,7 +291,7 @@ private:
     if (waypoint_type == ArmMotion::Goal::CARTESIAN_SPACE) {
       // Get each waypoint in cartesian space
       Eigen::Matrix3Xd xyz_positions(3, num_waypoints);
-      Eigen::Matrix3Xd orientation(3, num_waypoints);
+      Eigen::Matrix3Xd euler_angles(3, num_waypoints);
       for (size_t i = 0; i < num_waypoints; ++i) {
         if (use_traj_times) {
           wp_times(i) = goal->waypoints.points[i].time_from_start.sec + goal->waypoints.points[i].time_from_start.nanosec * 1e-9;
@@ -257,12 +299,12 @@ private:
         xyz_positions(0, i) = goal->waypoints.points[i].positions[0];
         xyz_positions(1, i) = goal->waypoints.points[i].positions[1];
         xyz_positions(2, i) = goal->waypoints.points[i].positions[2];
-        orientation(0, i) = goal->waypoints.points[i].positions[3];
-        orientation(1, i) = goal->waypoints.points[i].positions[4];
-        orientation(2, i) = goal->waypoints.points[i].positions[5];
+        euler_angles(0, i) = goal->waypoints.points[i].positions[3];
+        euler_angles(1, i) = goal->waypoints.points[i].positions[4];
+        euler_angles(2, i) = goal->waypoints.points[i].positions[5];
       }
 
-      updateCartesianWaypoints(use_traj_times, wp_times, xyz_positions, &orientation);
+      updateSE3Waypoints(use_traj_times, wp_times, xyz_positions, &euler_angles, false);
     } else if (waypoint_type == ArmMotion::Goal::JOINT_SPACE) {
       // Get each waypoint in joint space
       Eigen::MatrixXd pos(num_joints_, num_waypoints);
@@ -274,16 +316,19 @@ private:
           wp_times(i) = goal->waypoints.points[i].time_from_start.sec + goal->waypoints.points[i].time_from_start.nanosec * 1e-9;
         }
         
-        if (goal->waypoints.points[i].positions.size() != num_joints_ ||
-            goal->waypoints.points[i].velocities.size() != num_joints_ ||
-            goal->waypoints.points[i].accelerations.size() != num_joints_) {
+        if (goal->waypoints.points[i].positions.size() != static_cast<size_t>(num_joints_) ||
+            goal->waypoints.points[i].velocities.size() != static_cast<size_t>(num_joints_) ||
+            goal->waypoints.points[i].accelerations.size() != static_cast<size_t>(num_joints_)) {
           RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - Position, velocity, and acceleration sizes not correct for waypoint index");
           result->success = false;
           goal_handle->abort(result);
+
+          // Reset acting flag
+          acting_flag_ = false;
           return;
         }
 
-        for (size_t j = 0; j < num_joints_; ++j) {
+        for (size_t j = 0; j < static_cast<size_t>(num_joints_); ++j) {
           pos(j, i) = goal->waypoints.points[i].positions[j];
           vel(j, i) = goal->waypoints.points[i].velocities[j];
           accel(j, i) = goal->waypoints.points[i].accelerations[j];
@@ -306,6 +351,9 @@ private:
         goal_handle->canceled(result);
         setColor({0, 0, 0, 0});
         RCLCPP_INFO(this->get_logger(), "Arm motion was cancelled");
+        
+        // Reset acting flag
+        acting_flag_ = false;
         return;
       }
 
@@ -315,6 +363,9 @@ private:
         goal_handle->abort(result);
         setColor({0, 0, 0, 0});
         RCLCPP_INFO(this->get_logger(), "Arm motion was aborted due to compliant mode activation");
+        
+        // Reset acting flag
+        acting_flag_ = false;
         return;
       }
 
@@ -332,6 +383,8 @@ private:
       goal_handle->succeed(result);
       RCLCPP_INFO(this->get_logger(), "Completed arm motion action");
       setColor({0, 0, 0, 0});
+      // Reset acting flag
+      acting_flag_ = false;
     }
 
   }
@@ -363,9 +416,9 @@ private:
     for (size_t waypoint = 0; waypoint < num_waypoints; ++waypoint) {
       auto& cmd_waypoint = joint_trajectory->points[waypoint];
 
-      if (cmd_waypoint.positions.size() != num_joints_ ||
-          cmd_waypoint.velocities.size() != num_joints_ ||
-          cmd_waypoint.accelerations.size() != num_joints_) {
+      if (cmd_waypoint.positions.size() != static_cast<size_t>(num_joints_) ||
+          cmd_waypoint.velocities.size() != static_cast<size_t>(num_joints_) ||
+          cmd_waypoint.accelerations.size() != static_cast<size_t>(num_joints_)) {
         RCLCPP_ERROR_STREAM(this->get_logger(), "Position, velocity, and acceleration sizes not correct for waypoint index " << waypoint);
         return;
       }
@@ -374,7 +427,7 @@ private:
         RCLCPP_WARN_STREAM(this->get_logger(), "Effort commands in trajectories not supported; ignoring");
       }
 
-      for (size_t joint = 0; joint < num_joints_; ++joint) {
+      for (size_t joint = 0; joint < static_cast<size_t>(num_joints_); ++joint) {
         pos(joint, waypoint) = cmd_waypoint.positions[joint];
         vel(joint, waypoint) = cmd_waypoint.velocities[joint];
         accel(joint, waypoint) = cmd_waypoint.accelerations[joint];
@@ -401,24 +454,27 @@ private:
     // Fill in an Eigen::Matrix3xd with the xyz goal
     size_t num_waypoints = target_waypoints->points.size();
     Eigen::Matrix3Xd xyz_positions(3, num_waypoints);
-    Eigen::Matrix3Xd orientation(3, num_waypoints);
+    Eigen::Matrix3Xd euler_angles(3, num_waypoints);
     Eigen::VectorXd times(num_waypoints);
     for (size_t i = 0; i < num_waypoints; ++i) {
       times(i) = target_waypoints->points[i].time_from_start.sec + target_waypoints->points[i].time_from_start.nanosec * 1e-9;
       xyz_positions(0, i) = target_waypoints->points[i].positions[0];
       xyz_positions(1, i) = target_waypoints->points[i].positions[1];
       xyz_positions(2, i) = target_waypoints->points[i].positions[2];
-      orientation(0, i) = target_waypoints->points[i].positions[3];
-      orientation(1, i) = target_waypoints->points[i].positions[4];
-      orientation(2, i) = target_waypoints->points[i].positions[5];
+      euler_angles(0, i) = target_waypoints->points[i].positions[3];
+      euler_angles(1, i) = target_waypoints->points[i].positions[4];
+      euler_angles(2, i) = target_waypoints->points[i].positions[5];
     }
 
     // Replan
-    updateCartesianWaypoints(use_traj_times_, times, xyz_positions, &orientation);
+    updateSE3Waypoints(use_traj_times_, times, xyz_positions, &euler_angles, true);
   }
 
   // "Jog" the arm along each joint
   void jointJogCallback(const control_msgs::msg::JointJog::SharedPtr jog_msg) {
+
+    if (!homed_flag_)
+      return;
 
     if (compliant_mode_) {
       RCLCPP_ERROR_STREAM(this->get_logger(), "Deactivate compliant mode to use joint jog");
@@ -430,7 +486,7 @@ private:
       RCLCPP_WARN_STREAM(this->get_logger(), "No velocities specified... Assuming zero velocity");
       inc_vel = false;
     } 
-    else if (jog_msg->velocities.size() != num_joints_) {
+    else if (jog_msg->velocities.size() != static_cast<size_t>(num_joints_)) {
       RCLCPP_WARN_STREAM(this->get_logger(), "Velocities size not matching number of joints... Ignoring!");
       inc_vel = false;
     }
@@ -443,12 +499,12 @@ private:
     Eigen::MatrixXd accel(num_joints_, 1);
     Eigen::VectorXd times(1);
 
-    if (jog_msg->displacements.size() != num_joints_) {
+    if (jog_msg->displacements.size() != static_cast<size_t>(num_joints_)) {
       RCLCPP_ERROR_STREAM(this->get_logger(), "Displacement size not correct");
       return;
     }
 
-    for (size_t joint = 0; joint < num_joints_; ++joint) {
+    for (size_t joint = 0; joint < static_cast<size_t>(num_joints_); ++joint) {
       pos(joint, 0) = jog_msg->displacements[joint] + cur_pos[joint];
       if (inc_vel)
         vel(joint, 0) = jog_msg->velocities[joint];
@@ -465,6 +521,9 @@ private:
   // "Jog" the target end effector location in cartesian space, replanning
   // smoothly to the new location
   void cartesianJogCallback(const control_msgs::msg::JointJog::SharedPtr jog_msg) {
+
+    if (!homed_flag_)
+      return;
 
     if (compliant_mode_) {
       RCLCPP_ERROR_STREAM(this->get_logger(), "Deactivate compliant mode to use cartesian jog");
@@ -486,19 +545,68 @@ private:
     Eigen::Vector3d cur_euler = cur_orientation.eulerAngles(0, 1, 2);
 
     Eigen::Matrix3Xd xyz_positions(3, 1);
-    Eigen::Matrix3Xd orientation(3, 1);
+    Eigen::Matrix3Xd euler_angles(3, 1);
     Eigen::VectorXd times(1);
 
     times(0) = jog_msg->duration;
     xyz_positions(0, 0) = cur_pos[0] + jog_msg->displacements[0];
     xyz_positions(1, 0) = cur_pos[1] + jog_msg->displacements[1];
     xyz_positions(2, 0) = cur_pos[2] + jog_msg->displacements[2];
-    orientation(0, 0) = cur_euler[0];
-    orientation(1, 0) = cur_euler[1];
-    orientation(2, 0) = cur_euler[2];
+    euler_angles(0, 0) = cur_euler[0];
+    euler_angles(1, 0) = cur_euler[1];
+    euler_angles(2, 0) = cur_euler[2];
 
     // Replan
-    updateCartesianWaypoints(use_traj_times_, times, xyz_positions, &orientation);
+    updateSE3Waypoints(use_traj_times_, times, xyz_positions, &euler_angles, true);
+  }
+
+  // "Jog" the target end effector location in SE(3), replanning
+  // smoothly to the new location
+  // First three entires are angular, and last three are linear
+  void SE3JogCallback(const control_msgs::msg::JointJog::SharedPtr jog_msg) {
+
+    if (!homed_flag_ || acting_flag_)
+      return;
+
+    if (compliant_mode_) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Deactivate compliant mode to use SE(3) jog");
+      return;
+    }
+
+    if (jog_msg->displacements.size() != 6) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Displacement size not correct");
+      return;
+    }
+    
+    // Get current position and orientation
+    // (We use the last position command for smoother motion)
+    Eigen::Vector3d cur_pos;
+    Eigen::Matrix3d cur_orientation, new_orientation;
+    arm_->FK(arm_->lastFeedback().getPositionCommand(), cur_pos, cur_orientation);
+
+    Eigen::Matrix3Xd xyz_positions(3, 1);
+    Eigen::Matrix3Xd euler_angles(3, 1);
+    Eigen::VectorXd times(1);
+
+    // Calculate the new end-effector orientation
+    // World frame's X-axis is End-effector frame's Z-axis: Roll
+    // World frame's Y-axis is End-effector frame's X-axis: Pitch
+    // World frame's Z-axis is End-effector frame's Y-axis: Yaw
+    // In our convention, yaw is global (extrinsic) and roll is local (intrinsic), with respect to the end-effector frame
+    times(0) = jog_msg->duration;
+    new_orientation = cur_orientation
+                      * Eigen::AngleAxisd(jog_msg->displacements[2], Eigen::Vector3d::UnitY()).matrix() 
+                      * Eigen::AngleAxisd(jog_msg->displacements[1], Eigen::Vector3d::UnitX()).matrix()
+                      * Eigen::AngleAxisd(jog_msg->displacements[0], Eigen::Vector3d::UnitZ()).matrix();
+
+    euler_angles = new_orientation.eulerAngles(0, 1, 2);
+
+    xyz_positions(0, 0) = cur_pos[0] + jog_msg->displacements[3]; // x
+    xyz_positions(1, 0) = cur_pos[1] + jog_msg->displacements[4]; // y
+    xyz_positions(2, 0) = cur_pos[2] + jog_msg->displacements[5]; // z
+
+    // Replan
+    updateSE3Waypoints(use_traj_times_, times, xyz_positions, &euler_angles, false);
   }
 
   /////////////////////////// UTILITY FUNCTIONS ///////////////////////////
@@ -549,7 +657,7 @@ private:
 
     center_of_mass_message_.m = 0.0;
     Eigen::Vector3d weighted_sum_com = Eigen::Vector3d::Zero();
-    for(int i = 0; i < model.getFrameCount(robot_model::FrameType::CenterOfMass); ++i) {
+    for(size_t i = 0; i < model.getFrameCount(robot_model::FrameType::CenterOfMass); ++i) {
       center_of_mass_message_.m += masses(i);
       frames[i] *= masses(i);
       weighted_sum_com(0) += frames[i](0, 3);
@@ -567,7 +675,7 @@ private:
 
   void setColor(const Color& color) {
     auto& command = arm_->pendingCommand();
-    for (int i = 0; i < command.size(); ++i) {
+    for (size_t i = 0; i < command.size(); ++i) {
       command[i].led().set(color);
     }
   }
@@ -575,12 +683,12 @@ private:
   // Each row is a separate joint; each column is a separate waypoint.
   void updateJointWaypoints(const bool use_traj_times, const Eigen::VectorXd& times, const Eigen::MatrixXd& angles, const Eigen::MatrixXd& velocities, const Eigen::MatrixXd& accelerations) {
     // Data sanity check:
-    if (angles.rows() != velocities.rows()       || // Number of joints
-        angles.rows() != accelerations.rows()    ||
-        angles.rows() != arm_->size() ||
-        angles.cols() != velocities.cols()       || // Number of waypoints
-        angles.cols() != accelerations.cols()    ||
-        angles.cols() != times.size()            ||
+    if (angles.rows() != velocities.rows()                    || // Number of joints
+        angles.rows() != accelerations.rows()                 ||
+        angles.rows() != static_cast<long int>(arm_->size())  ||
+        angles.cols() != velocities.cols()                    || // Number of waypoints
+        angles.cols() != accelerations.cols()                 ||
+        angles.cols() != times.size()                         ||
         angles.cols() == 0) {
       RCLCPP_ERROR(this->get_logger(), "Angles, velocities, accelerations, or times were not the correct size");
       return;
@@ -598,9 +706,9 @@ private:
   // Replan a smooth joint trajectory from the current location through a
   // series of cartesian waypoints.
   // xyz positions should be a 3xn vector of target positions
-  void updateCartesianWaypoints(const bool use_traj_times, const Eigen::VectorXd& times, const Eigen::Matrix3Xd& xyz_positions, const Eigen::Matrix3Xd* orientation = nullptr) {
+  void updateSE3Waypoints(const bool use_traj_times, const Eigen::VectorXd& times, const Eigen::Matrix3Xd& xyz_positions, const Eigen::Matrix3Xd* euler_angles = nullptr, const bool pureCartesian = false) {
     // Data sanity check:
-    if (orientation && orientation->cols() != xyz_positions.cols())
+    if (euler_angles && euler_angles->cols() != xyz_positions.cols())
       return;
 
     // These are the joint angles that will be added
@@ -615,18 +723,29 @@ private:
       last_position = ik_seed_;
     }
 
+    int min_num_joints = 6;
+    if(pureCartesian)
+    {
+      min_num_joints = 3;
+    }
+
     // For each waypoint, find the joint angles to move to it, starting from the last
     // waypoint, and save into the position vector.
-    if (orientation && num_joints_ >= 6) {
+    if (euler_angles && num_joints_ >= min_num_joints) {
       // If we are given tip directions, add these too...
-      for (size_t i = 0; i < num_waypoints; ++i) {
+      for (size_t i = 0; i < static_cast<size_t>(num_waypoints); ++i) {
 
-        // Covert orientation to a 3x3 rotation matrix
+        // Covert euler angles to a 3x3 rotation matrix
         Eigen::Matrix3d rotation_matrix;
 
-        rotation_matrix = Eigen::AngleAxisd(orientation->col(i)[0], Eigen::Vector3d::UnitX()).matrix()
-                        * Eigen::AngleAxisd(orientation->col(i)[1], Eigen::Vector3d::UnitY()).matrix()
-                        * Eigen::AngleAxisd(orientation->col(i)[2], Eigen::Vector3d::UnitZ()).matrix();
+        // Following Eigen's convention: 
+        // Yaw(Z) (locally) → Pitch(Y) (locally) → Roll(X) (locally)
+        // which is equivalent to:
+        // Roll(X) (globally) → Pitch(Y) (globally) → Yaw(Z) (globally) 
+        // Roll is extrinsic, and yaw is intrinsic
+        rotation_matrix = Eigen::AngleAxisd(euler_angles->col(i)[0], Eigen::Vector3d::UnitX()).matrix()
+                        * Eigen::AngleAxisd(euler_angles->col(i)[1], Eigen::Vector3d::UnitY()).matrix()
+                        * Eigen::AngleAxisd(euler_angles->col(i)[2], Eigen::Vector3d::UnitZ()).matrix();
 
         last_position = arm_->solveIK(last_position, xyz_positions.col(i), rotation_matrix);
 
@@ -650,7 +769,7 @@ private:
         positions.col(i) = last_position;
       }
     } else {
-      for (size_t i = 0; i < num_waypoints; ++i) {
+      for (size_t i = 0; i < static_cast<size_t>(num_waypoints); ++i) {
         last_position = arm_->solveIK(last_position, xyz_positions.col(i));
         positions.col(i) = last_position;
       }
@@ -749,14 +868,14 @@ private:
     }
     home_position_ = Eigen::VectorXd(arm_->size());
     if (home_position_vector.empty()) {
-      for (size_t i = 0; i < home_position_.size(); ++i) {
+      for (size_t i = 0; i < static_cast<size_t>(home_position_.size()); ++i) {
         home_position_[i] = 0.01; // Avoid common singularities by being slightly off from zero
       }
     } else if (home_position_vector.size() != arm_->size()) {
       RCLCPP_ERROR(this->get_logger(), "'home_position' parameter not the same length as HRDF file's number of DoF! Aborting!");
       return false;
     } else {
-      for (size_t i = 0; i < home_position_.size(); ++i) {
+      for (size_t i = 0; i < static_cast<size_t>(home_position_.size()); ++i) {
         home_position_[i] = home_position_vector[i];
       }
     }
@@ -841,7 +960,6 @@ int main(int argc, char ** argv) {
   while (rclcpp::ok()) {
 
     node->update();
-
     // Call any pending callbacks (note -- this may update our planned motion)
     rclcpp::spin_some(node);
   }

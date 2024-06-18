@@ -34,7 +34,7 @@ public:
 
   void updateStance(const Eigen::Vector3d& trans_vel, const Eigen::Vector3d& rotate_vel, const Eigen::VectorXd& current_angles, double dt);
 
-  const double getLevelHomeStanceZ() const { return level_home_stance_xyz_(2); }
+  double getLevelHomeStanceZ() const { return level_home_stance_xyz_(2); }
   const Eigen::Vector3d& getHomeStanceXYZ() const { return home_stance_xyz_; }
   const Eigen::Vector3d& getCmdStanceXYZ() const { return cmd_stance_xyz_; }
   const Eigen::Vector3d& getFbkStanceXYZ() const { return fbk_stance_xyz_; }

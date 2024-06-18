@@ -2,7 +2,8 @@ import os
 import sys
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, SetLaunchConfiguration, LogInfo
+from launch.actions import DeclareLaunchArgument, SetLaunchConfiguration, LogInfo, IncludeLaunchDescription
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import Command, FindExecutable, LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
@@ -69,47 +70,12 @@ def generate_launch_description():
   description_package = LaunchConfiguration("description_package")
   prefix = LaunchConfiguration("prefix")
   params_file = LaunchConfiguration("params_file")
-
-  # Get URDF via xacro
-  robot_description_content = Command(
-      [
-          PathJoinSubstitution([FindExecutable(name="xacro")]),
-          " ",
-          PathJoinSubstitution(
-              [FindPackageShare(description_package), "urdf", "kits", PythonExpression(['"', hebi_arm, '.urdf.xacro"'])]
-          ),
-          " "
-          "prefix:=",
-          prefix,
-      ]
-  )
-
-  robot_description = {"robot_description": robot_description_content}
-  robot_state_publisher_node = Node(
-      package="robot_state_publisher",
-      executable="robot_state_publisher",
-      output="both",
-      parameters=[robot_description],
-      namespace=prefix,
-      remappings=[('/joint_states', '/fdbk_joint_states')]
-  )
-
+  use_rviz = LaunchConfiguration("use_rviz")
+  
   robot_params = PathJoinSubstitution(
     [FindPackageShare('hebi_ros2_examples'), 'config', params_file]
   )
-  arm_node = Node(
-    package='hebi_ros2_examples',
-    executable='arm_node',
-    name='arm_node',
-    output='screen',
-    parameters=[
-      robot_params,
-      {"prefix": prefix}
-    ],
-    namespace=prefix,
-  )
 
-  
   rviz_config_file = PathJoinSubstitution(
     [FindPackageShare(description_package), "rviz", "hebi_arm.rviz"]
   )
@@ -119,15 +85,53 @@ def generate_launch_description():
       name="rviz2",
       output="log",
       arguments=["-d", rviz_config_file],
-      condition=IfCondition(LaunchConfiguration("use_rviz")),
+      condition=IfCondition(use_rviz),
   )
+
+  xbox_arm = Node(
+    package='hebi_ros2_examples',
+    executable='xbox_arm',
+    name='xbox_arm',
+    output='screen',
+    parameters=[
+      robot_params,
+      {"prefix": prefix}
+    ],
+    namespace=prefix,
+  )
+
+  joy_node = Node(
+        package="joy",
+        executable="joy_node",
+        name="joy_node",
+        output="screen"
+    )
+
+  # Other launch files must be included at the end to avoid argument reinitialization
+  arm_node_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource([
+            PathJoinSubstitution([
+                FindPackageShare('hebi_ros2_examples'),
+                'launch',
+                'arm_node.launch.py'
+            ])
+        ]),
+        launch_arguments={
+            "hebi_arm": hebi_arm,
+            "prefix": prefix,
+            "use_rviz": "false",
+            "description_package": description_package,
+            "params_file": params_file,
+        }.items(),
+    )
 
   return LaunchDescription(
     declared_arguments +
     default_arguments +
     [
-      robot_state_publisher_node,
-      arm_node,
-      rviz_node
+      rviz_node,
+      xbox_arm,
+      joy_node,
+      arm_node_launch
     ]
   )

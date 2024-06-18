@@ -6,7 +6,7 @@
 mkdir -p ~/hebi_ws/src
 cd ~/hebi_ws/src
 git clone -b ros2 https://github.com/HebiRobotics/hebi_cpp_api_ros.git
-git clone -b ros2 https://github.com/HebiRobotics/hebi_description.git
+git clone -b ros2/$ROS_DISTRO https://github.com/HebiRobotics/hebi_description.git # ROS_DISTRO can be either humble, iron, or jazzy
 git clone https://github.com/HebiRobotics/hebi_msgs.git
 git clone https://github.com/HebiRobotics/hebi_ros2_examples.git
 ```
@@ -83,7 +83,7 @@ The parameters are defined as follows -
 - `home_position`: Array of float values to move your arm after initialization.
 
 **NOTE:**
-- `names` and `families` of your modules can be found using Scope.
+- `names` and `families` of your modules can be found and changed using Scope.
 - If the length of `home_position` array is greater than the number of joints, the remaining values will be ignored. **TO BE IMPLEMENTED**
 
 The configuration file for HEBI Arm A-2085-05 is given below.

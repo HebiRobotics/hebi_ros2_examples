@@ -435,7 +435,7 @@ int getFirstOutOfRange(const Eigen::VectorXd& positions)
     
 bool getMStopPressed(const hebi::GroupFeedback& fbk)
 {
-  for (int i = 0; i < fbk.size(); ++i)
+  for (size_t i = 0; i < fbk.size(); ++i)
   {
     // At least one module has the m-stop pressed!
     auto& mstop = fbk[i].actuator().mstopState();

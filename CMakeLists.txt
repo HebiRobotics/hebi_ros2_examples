@@ -62,6 +62,18 @@ if(moveit_ros_planning_interface_FOUND)
   )
 endif()
 
+add_executable(xbox_arm src/kits/arm/xbox_arm.cpp)
+ament_target_dependencies(xbox_arm
+  rclcpp
+  rclcpp_action
+  trajectory_msgs
+  hebi_msgs
+  geometry_msgs
+  hebi_cpp_api
+  hebi_msgs
+  control_msgs
+)
+
 add_executable(omni_base_node src/kits/base/omni_base_node.cpp src/kits/base/util/omni_base.cpp src/kits/base/util/odom_publisher.cpp)
 ament_target_dependencies(omni_base_node
   rclcpp
@@ -137,6 +149,7 @@ install(TARGETS
   diff_drive_node
   hexapod_control
   treaded_base_node
+  xbox_arm
   DESTINATION lib/${PROJECT_NAME})
 
 if(moveit_ros_planning_interface_FOUND)
