@@ -77,7 +77,7 @@ def generate_launch_description():
   )
 
   rviz_config_file = PathJoinSubstitution(
-    [FindPackageShare(description_package), "rviz", "hebi_arm.rviz"]
+    [FindPackageShare("hebi_ros2_examples"), "config/rviz", "magnet_arm.rviz"]
   )
   rviz_node = Node(
       package="rviz2",
@@ -99,13 +99,6 @@ def generate_launch_description():
     ],
     namespace=prefix,
   )
-
-  joy_node = Node(
-        package="joy",
-        executable="joy_node",
-        name="joy_node",
-        output="screen"
-    )
 
   # Other launch files must be included at the end to avoid argument reinitialization
   arm_node_launch = IncludeLaunchDescription(
@@ -131,7 +124,6 @@ def generate_launch_description():
     [
       rviz_node,
       magnet_arm,
-      joy_node,
       arm_node_launch
     ]
   )

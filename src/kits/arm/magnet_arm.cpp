@@ -3,10 +3,17 @@
 #include <control_msgs/msg/joint_jog.hpp>
 
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
-#include <sensor_msgs/msg/joy.hpp>
+#include <sensor_msgs/msg/joint_state.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <tf2_ros/transform_listener.h>
+#include <tf2_ros/buffer.h>
+#include <tf2/LinearMath/Quaternion.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#include "visualization_msgs/msg/marker_array.hpp"
+#include "visualization_msgs/msg/marker.hpp"
 
 #include <hebi_msgs/action/arm_motion.hpp>
+
 
 #ifndef M_PI
   #define M_PI 3.14159265358979323846
@@ -39,14 +46,10 @@ public:
             RCLCPP_WARN(this->get_logger(), "Could not find/read 'names' parameter; defaulting to all zeros!");
         }
 
-        // Initialize axes vector
-        std::vector<float> axes_0 = {-0.0f, -0.0f, 1.0f, -0.0f, -0.0f, 1.0f, 0.0f, 0.0f};
-        controller_state_.axes = axes_0;
+        // TF Listener and Buffer
+        tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
+        tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
 
-        // Initialize buttons vector
-        std::vector<int> buttons_0 = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-        controller_state_.buttons = buttons_0;
-        
         // Timer
         timer_ = this->create_wall_timer(
         std::chrono::milliseconds(static_cast<int>(1000.0/rate)),
@@ -56,15 +59,51 @@ public:
         joint_jog_publisher_ = this->create_publisher<control_msgs::msg::JointJog>("joint_jog", 50);
         cartesian_jog_publisher_ = this->create_publisher<control_msgs::msg::JointJog>("cartesian_jog", 50);
         SE3_jog_publisher_ = this->create_publisher<control_msgs::msg::JointJog>("SE3_jog", 50);
+        effort_markers_publisher_ = create_publisher<visualization_msgs::msg::MarkerArray>("effort_markers", 10);
 
         // Subscribers
-        joy_subscriber_ = this->create_subscription<sensor_msgs::msg::Joy>(
-        "joy", 10, std::bind(&MagnetArm::joy_callback, this, std::placeholders::_1));
+        js_feedback_subscriber_ = this->create_subscription<sensor_msgs::msg::JointState>(
+        "fdbk_joint_states", 10, std::bind(&MagnetArm::js_feedback_callback, this, std::placeholders::_1));
 
         // Action Client
         arm_motion_client_ = rclcpp_action::create_client<hebi_msgs::action::ArmMotion>(this, "arm_motion");
 
-        RCLCPP_INFO(this->get_logger(), "Started X-Box arm controller");
+        RCLCPP_INFO(this->get_logger(), "Initializing arms");
+
+        // Initialize Messages
+        feedback_.name = joint_names_;
+        feedback_.position = home_position_;
+
+        visualization_msgs::msg::Marker effort_marker_;
+        geometry_msgs::msg::TransformStamped joint_tf_{};
+
+        for (size_t joint_idx = 0; joint_idx < joint_names_.size(); ++joint_idx)
+        {
+            // Initialize Feedback Messages
+            feedback_.velocity.push_back(0.0);
+            feedback_.effort.push_back(0.0);
+
+            // Initialize TransformStamped Messages
+            joint_tfs_.push_back(joint_tf_);
+
+            // Initialize Marker Messages
+            effort_marker_.header.frame_id = "base_link";
+            effort_marker_.header.stamp = get_clock()->now();
+            effort_marker_.id = joint_idx;
+            effort_marker_.type = visualization_msgs::msg::Marker::ARROW;
+            effort_marker_.action = visualization_msgs::msg::Marker::ADD;
+            effort_marker_.scale.x = arrow_scale;   // Diameter in x
+            effort_marker_.scale.y = arrow_scale;   // Diameter in y
+            effort_marker_.scale.z = arrow_scale;         // Height
+            effort_marker_.color.r = 1.0f;
+            effort_marker_.color.g = 0.6f;
+            effort_marker_.color.b = 0.0f;
+            effort_marker_.color.a = 1.0;
+
+            effort_markers_.markers.push_back(effort_marker_);
+        }
+
+        RCLCPP_INFO(this->get_logger(), "Started Magnetic Arm Demo");
     }
 
 private:
@@ -75,11 +114,16 @@ private:
     rclcpp::Publisher<control_msgs::msg::JointJog>::SharedPtr joint_jog_publisher_;
     rclcpp::Publisher<control_msgs::msg::JointJog>::SharedPtr cartesian_jog_publisher_;
     rclcpp::Publisher<control_msgs::msg::JointJog>::SharedPtr SE3_jog_publisher_;
-    rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_subscriber_;
+    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr effort_markers_publisher_;
+    rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr js_feedback_subscriber_;
     rclcpp_action::Client<hebi_msgs::action::ArmMotion>::SharedPtr arm_motion_client_;
+    std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
+    std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
     // Initialize controller state
-    sensor_msgs::msg::Joy controller_state_;
+    sensor_msgs::msg::JointState feedback_;
+    std::vector<geometry_msgs::msg::TransformStamped> joint_tfs_;
+    visualization_msgs::msg::MarkerArray effort_markers_;
 
     std::vector<std::string> joint_names_;
     std::vector<double> home_position_;
@@ -106,62 +150,60 @@ private:
     // Flags
     bool acting_flag_; // Indicates that an action is being executed
 
-    void joy_callback(const sensor_msgs::msg::Joy::SharedPtr msg)
+    // 
+    double arrow_scale = 0.02;
+
+    void js_feedback_callback(const sensor_msgs::msg::JointState::SharedPtr msg)
     {
         // Update the controller state
-        controller_state_ = *msg;
+        feedback_ = *msg;
     }
 
-    void process_controller()
+    void publish_markers()
     {
-        // Fowards (+X) and backwards (-X) motion through Left Joystick
-        x_vel_ += low_pass_admittance_ * (x_vel_gain_ * controller_state_.axes.at(1) - x_vel_);
+        // For every joint
+        for (size_t joint_idx = 0; joint_idx < joint_names_.size(); ++joint_idx)
+        {
+            try {
+                joint_tfs_.at(joint_idx) = tf_buffer_->lookupTransform("base_link", joint_names_.at(joint_idx) + "/INPUT_INTERFACE", tf2::TimePointZero);
+                // RCLCPP_INFO(this->get_logger(), "Transform: %f, %f, %f",
+                //     joint_tfs_.at(joint_idx).transform.translation.x,
+                //     joint_tfs_.at(joint_idx).transform.translation.y,
+                //     joint_tfs_.at(joint_idx).transform.translation.z);
+            }
+            catch (tf2::TransformException & ex) {
+                RCLCPP_DEBUG(this->get_logger(), "Could not transform: %s", ex.what());
+            }
 
-        // Left (+Y) and right (-Y) motion through Left Joystick
-        y_vel_ += low_pass_admittance_ * (y_vel_gain_ * controller_state_.axes.at(0) - y_vel_);
+            // Construct the marker
+            effort_markers_.markers.at(joint_idx).header.stamp = get_clock()->now();
+            effort_markers_.markers.at(joint_idx).pose.position.x = joint_tfs_.at(joint_idx).transform.translation.x;
+            effort_markers_.markers.at(joint_idx).pose.position.y = joint_tfs_.at(joint_idx).transform.translation.y;
+            effort_markers_.markers.at(joint_idx).pose.position.z = joint_tfs_.at(joint_idx).transform.translation.z;
+            effort_markers_.markers.at(joint_idx).pose.orientation.x = 0.0;
+            effort_markers_.markers.at(joint_idx).pose.orientation.y = -0.7071068;
+            effort_markers_.markers.at(joint_idx).pose.orientation.z = 0.0;
+            effort_markers_.markers.at(joint_idx).pose.orientation.w = 0.7071068;
 
-        // Up (+Z) and down (-Z) motion through L1 and L2
-        // Remain stationary if neither pressed
-        if (controller_state_.buttons.at(4) == 0 && 
-            static_cast<int>(controller_state_.axes.at(2)) == 1)
-        {
-            z_vel_ += low_pass_admittance_ * (0 - z_vel_);
-        }
-        // Move up if L1 pressed
-        else if (controller_state_.buttons.at(4) == 1)
-        {
-            z_vel_ += low_pass_admittance_ * (z_vel_gain_ - z_vel_);
-        }
-        // Move down if L2 pressed
-        else if (static_cast<int>(controller_state_.axes.at(2)) == -1)
-        {
-            z_vel_ += low_pass_admittance_ * (-z_vel_gain_ - z_vel_);
-        }
+            // Make the arrow point towards the Z axis of the joint frame
+            // Combine the transform's orientation with a -90 degree rotation about the y-axis
+            tf2::Quaternion tf_quat, rot_y_90, result_quat;
+            tf2::fromMsg(joint_tfs_.at(joint_idx).transform.rotation, tf_quat);
 
-        // Roll clockwise (+X) and counterclockwise (-X) through arrow keys
-        // Return to zero if neither pressed
-        if (static_cast<int>(controller_state_.axes.at(6)) == 0)
-        {
-            roll_vel_ = 0; //TOFIX
-        }
-        // Roll clockwise if right key pressed
-        else if (static_cast<int>(controller_state_.axes.at(6)) == -1)
-        {
-            roll_vel_ = roll_vel_gain_;
-        }
-        // Roll counterclockwise if left key pressed
-        else if (static_cast<int>(controller_state_.axes.at(6)) == 1)
-        {
-            roll_vel_ = -roll_vel_gain_;
+            // Create a quaternion representing a -90 degree rotation around the y-axis
+            rot_y_90.setRPY(0, -M_PI_2, 0);
+
+            // Apply the rotation to the transform's orientation
+            result_quat = tf_quat * rot_y_90;
+
+            // Use the resulting quaternion for the arrow marker's orientation
+            effort_markers_.markers.at(joint_idx).pose.orientation = tf2::toMsg(result_quat);
+
+            effort_markers_.markers.at(joint_idx).scale.x = arrow_scale * feedback_.effort.at(joint_idx);   // Diameter in x
         }
 
-        // Pitch up (+Y) and down (-Y) through Right Joystick
-        // Invert controls
-        pitch_vel_ += low_pass_admittance_ * (-pitch_vel_gain_ * controller_state_.axes.at(4) - pitch_vel_);
-
-        // Yaw left (+Z) and right (-Z) through Right Joystick
-        // Invert controls
-        yaw_vel_ += low_pass_admittance_ * (-yaw_vel_gain_ * -controller_state_.axes.at(3) - yaw_vel_);
+        // Publish Effort Markers
+        effort_markers_publisher_->publish(effort_markers_);
     }
 
     void joint_jog_pub()
@@ -338,26 +380,25 @@ private:
 
     void timer_callback()
     {   
-        // Decide Jog values based on controller state
-        process_controller();
-            
         // Re-home if START Button is pressed
-        if (controller_state_.buttons.at(7) == 1 && !acting_flag_)
-        {
-            go_home();
-            acting_flag_ = true; // Ensure's that the action is called only once when the START Button is pressed
-        }
+        // if (controller_state_.buttons.at(7) == 1 && !acting_flag_)
+        // {
+        //     go_home();
+        //     acting_flag_ = true; // Ensure's that the action is called only once when the START Button is pressed
+        // }
 
         // Publish Jog Messages accordingly
         // Publish SE(3) jog messages only when there are enough degrees of freedom
-        if (joint_names_.size() >= 6)
-        {
-            SE3_jog_pub();
-        }
-        else
-        {
-            cartesian_jog_pub();
-        }
+        // if (joint_names_.size() >= 6)
+        // {
+        //     SE3_jog_pub();
+        // }
+        // else
+        // {
+        //     cartesian_jog_pub();
+        // }
+
+        publish_markers();
     }
 };
 

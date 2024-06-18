@@ -28,6 +28,7 @@
   <depend>rclcpp_action</depend>
   <depend>hebi_cpp_api</depend>
   <depend>hebi_msgs</depend>
+  <depend>tf2</depend>
   <depend>tf2_ros</depend>
   <depend>moveit_ros_planning_interface</depend>
   <depend>moveit_msgs</depend>  
