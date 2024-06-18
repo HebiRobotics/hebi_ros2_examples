@@ -56,6 +56,7 @@ if(moveit_ros_planning_interface_FOUND)
     trajectory_msgs
     hebi_msgs
     geometry_msgs
+    sensor_msgs
     moveit_msgs
     moveit_ros_planning_interface
     moveit_visual_tools
@@ -69,8 +70,19 @@ ament_target_dependencies(xbox_arm
   trajectory_msgs
   hebi_msgs
   geometry_msgs
+  sensor_msgs
   hebi_cpp_api
+  control_msgs
+)
+
+add_executable(magnet_arm src/kits/arm/magnet_arm.cpp)
+ament_target_dependencies(magnet_arm
+  rclcpp
+  rclcpp_action
+  trajectory_msgs
   hebi_msgs
+  geometry_msgs
+  hebi_cpp_api
   control_msgs
 )
 
@@ -150,6 +162,7 @@ install(TARGETS
   hexapod_control
   treaded_base_node
   xbox_arm
+  magnet_arm
   DESTINATION lib/${PROJECT_NAME})
 
 if(moveit_ros_planning_interface_FOUND)
