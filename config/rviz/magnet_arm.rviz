@@ -9,6 +9,7 @@ Panels:
         - /RobotModel1
         - /TF1
         - /MarkerArray1
+        - /Marker1
       Splitter Ratio: 0.5
     Tree Height: 778
   - Class: rviz_common/Selection
@@ -200,6 +201,19 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /effort_markers
+      Value: true
+    - Class: rviz_default_plugins/Marker
+      Enabled: true
+      Name: Marker
+      Namespaces:
+        "": true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /external_wrench_marker
       Value: true
   Enabled: true
   Global Options:

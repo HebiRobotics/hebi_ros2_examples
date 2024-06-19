@@ -7,6 +7,7 @@
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <geometry_msgs/msg/inertia.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/wrench.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <hebi_msgs/action/arm_motion.hpp>
 
@@ -84,6 +85,8 @@ public:
     arm_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("fdbk_joint_states", 50);
     center_of_mass_publisher_ = this->create_publisher<geometry_msgs::msg::Inertia>("inertia", 50);
     end_effector_pose_publisher_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("ee_pose", 50);
+    ee_wrench_raw_publisher_ = this->create_publisher<geometry_msgs::msg::Wrench>("ee_wrench_raw", 50);
+    ee_wrench_gravity_compensated_publisher_ = this->create_publisher<geometry_msgs::msg::Wrench>("ee_wrench_gravity_compensated", 50);
     
     // start the action server
     action_server_ = rclcpp_action::create_server<ArmMotion>(
@@ -156,6 +159,8 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr arm_state_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Inertia>::SharedPtr center_of_mass_publisher_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr end_effector_pose_publisher_;
+  rclcpp::Publisher<geometry_msgs::msg::Wrench>::SharedPtr ee_wrench_raw_publisher_;
+  rclcpp::Publisher<geometry_msgs::msg::Wrench>::SharedPtr ee_wrench_gravity_compensated_publisher_;
 
   rclcpp_action::Server<hebi_msgs::action::ArmMotion>::SharedPtr action_server_;
 
@@ -647,6 +652,47 @@ private:
     pose_msg.pose.orientation.w = cur_orientation_quat.w();
 
     end_effector_pose_publisher_->publish(pose_msg);
+
+    // Publish Raw End-Effector Wrench and Gravity Compensated End-Effector Wrench
+    geometry_msgs::msg::Wrench ee_wrench_raw_msg, ee_wrench_gravcomp_msg;
+    std::vector<MatrixXd, Eigen::aligned_allocator<Eigen::MatrixXd>> ee_jacobian;
+    arm_->robotModel().getJacobians(hebi::robot_model::FrameType::EndEffector, pos, ee_jacobian);
+
+    auto eff_cmd = fdbk.getEffortCommand();
+
+    // For 6x6 Jacobian
+    if (ee_jacobian.at(0).determinant() != 0) 
+    {
+      // Compute the inverse of the Jacobian
+      Eigen::MatrixXd ee_jacobian_inverse = ee_jacobian.at(0).inverse();
+
+      // Wrench_EE = Jacobian_EE^{-T} * JointTorques
+      Eigen::VectorXd ee_wrench_raw = ee_jacobian_inverse.transpose() * eff;
+      Eigen::VectorXd ee_wrench_gravcomp = ee_jacobian_inverse.transpose() * (eff - eff_cmd);
+
+      // Construct Raw End-Effector Wrench Message
+      ee_wrench_raw_msg.force.x = ee_wrench_raw(0);
+      ee_wrench_raw_msg.force.y = ee_wrench_raw(1);
+      ee_wrench_raw_msg.force.z = ee_wrench_raw(2);
+      ee_wrench_raw_msg.torque.x = ee_wrench_raw(3);
+      ee_wrench_raw_msg.torque.y = ee_wrench_raw(4);
+      ee_wrench_raw_msg.torque.z = ee_wrench_raw(5);
+
+      // Construct Gravity Compensated End-Effector Wrench Message
+      ee_wrench_gravcomp_msg.force.x = ee_wrench_gravcomp(0);
+      ee_wrench_gravcomp_msg.force.y = ee_wrench_gravcomp(1);
+      ee_wrench_gravcomp_msg.force.z = ee_wrench_gravcomp(2);
+      ee_wrench_gravcomp_msg.torque.x = ee_wrench_gravcomp(3);
+      ee_wrench_gravcomp_msg.torque.y = ee_wrench_gravcomp(4);
+      ee_wrench_gravcomp_msg.torque.z = ee_wrench_gravcomp(5);
+    }
+    else
+    {
+      RCLCPP_WARN(this->get_logger(), "Singularity!");
+    }
+
+    ee_wrench_raw_publisher_->publish(ee_wrench_raw_msg);
+    ee_wrench_gravity_compensated_publisher_->publish(ee_wrench_gravcomp_msg);
 
     // Publish Center of Mass
     auto& model = arm_->robotModel();

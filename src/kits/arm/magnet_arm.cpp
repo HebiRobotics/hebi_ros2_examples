@@ -3,6 +3,7 @@
 #include <control_msgs/msg/joint_jog.hpp>
 
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
+#include <geometry_msgs/msg/wrench.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <tf2_ros/transform_listener.h>
@@ -13,6 +14,7 @@
 #include "visualization_msgs/msg/marker.hpp"
 
 #include <hebi_msgs/action/arm_motion.hpp>
+#include <Eigen/Dense>
 
 
 #ifndef M_PI
@@ -60,23 +62,45 @@ public:
         cartesian_jog_publisher_ = this->create_publisher<control_msgs::msg::JointJog>("cartesian_jog", 50);
         SE3_jog_publisher_ = this->create_publisher<control_msgs::msg::JointJog>("SE3_jog", 50);
         effort_markers_publisher_ = create_publisher<visualization_msgs::msg::MarkerArray>("effort_markers", 10);
+        external_wrench_marker_publisher_ = create_publisher<visualization_msgs::msg::Marker>("external_wrench_marker", 10);
 
         // Subscribers
-        js_feedback_subscriber_ = this->create_subscription<sensor_msgs::msg::JointState>(
-        "fdbk_joint_states", 10, std::bind(&MagnetArm::js_feedback_callback, this, std::placeholders::_1));
+        fdbk_joint_states_subscriber_ = this->create_subscription<sensor_msgs::msg::JointState>(
+        "fdbk_joint_states", 10, std::bind(&MagnetArm::fdbk_joint_states_callback, this, std::placeholders::_1));
+        ee_wrench_gravity_compensated_subscriber_ = this->create_subscription<geometry_msgs::msg::Wrench>(
+        "ee_wrench_gravity_compensated", 10, std::bind(&MagnetArm::ee_wrench_gravity_compensated_callback, this, std::placeholders::_1));
 
         // Action Client
         arm_motion_client_ = rclcpp_action::create_client<hebi_msgs::action::ArmMotion>(this, "arm_motion");
 
         RCLCPP_INFO(this->get_logger(), "Initializing arms");
 
-        // Initialize Messages
+        // Initialize Message Vectors
+
+        // Initialize position, velocity, and effort feedbacl for all joints
         feedback_.name = joint_names_;
         feedback_.position = home_position_;
 
+        // Initialize marker for visualizing effort
         visualization_msgs::msg::Marker effort_marker_;
+
+        // Initialize marker for visualizing external Wrench
+        external_wrench_marker_.header.frame_id = "base_link";
+        external_wrench_marker_.header.stamp = get_clock()->now();
+        external_wrench_marker_.type = visualization_msgs::msg::Marker::ARROW;
+        external_wrench_marker_.action = visualization_msgs::msg::Marker::ADD;
+        external_wrench_marker_.scale.x = arrow_scale;   
+        external_wrench_marker_.scale.y = arrow_scale;   
+        external_wrench_marker_.scale.z = arrow_scale;        
+        external_wrench_marker_.color.r = 0.5f;
+        external_wrench_marker_.color.g = 0.5f;
+        external_wrench_marker_.color.b = 1.0f;
+        external_wrench_marker_.color.a = 1.0;
+
+        // Initialize all joint frames with respect to the base frame
         geometry_msgs::msg::TransformStamped joint_tf_{};
 
+        // For every joint
         for (size_t joint_idx = 0; joint_idx < joint_names_.size(); ++joint_idx)
         {
             // Initialize Feedback Messages
@@ -92,11 +116,11 @@ public:
             effort_marker_.id = joint_idx;
             effort_marker_.type = visualization_msgs::msg::Marker::ARROW;
             effort_marker_.action = visualization_msgs::msg::Marker::ADD;
-            effort_marker_.scale.x = arrow_scale;   // Diameter in x
-            effort_marker_.scale.y = arrow_scale;   // Diameter in y
-            effort_marker_.scale.z = arrow_scale;         // Height
+            effort_marker_.scale.x = arrow_scale;   
+            effort_marker_.scale.y = arrow_scale;   
+            effort_marker_.scale.z = arrow_scale;        
             effort_marker_.color.r = 1.0f;
-            effort_marker_.color.g = 0.6f;
+            effort_marker_.color.g = 0.8f;
             effort_marker_.color.b = 0.0f;
             effort_marker_.color.a = 1.0;
 
@@ -115,15 +139,19 @@ private:
     rclcpp::Publisher<control_msgs::msg::JointJog>::SharedPtr cartesian_jog_publisher_;
     rclcpp::Publisher<control_msgs::msg::JointJog>::SharedPtr SE3_jog_publisher_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr effort_markers_publisher_;
-    rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr js_feedback_subscriber_;
+    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr external_wrench_marker_publisher_;
+    rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr fdbk_joint_states_subscriber_;
+    rclcpp::Subscription<geometry_msgs::msg::Wrench>::SharedPtr ee_wrench_gravity_compensated_subscriber_;
     rclcpp_action::Client<hebi_msgs::action::ArmMotion>::SharedPtr arm_motion_client_;
     std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
-    // Initialize controller state
+    // Initialize state variables
     sensor_msgs::msg::JointState feedback_;
     std::vector<geometry_msgs::msg::TransformStamped> joint_tfs_;
     visualization_msgs::msg::MarkerArray effort_markers_;
+    visualization_msgs::msg::Marker external_wrench_marker_;
+    geometry_msgs::msg::Wrench external_wrench_;
 
     std::vector<std::string> joint_names_;
     std::vector<double> home_position_;
@@ -150,13 +178,27 @@ private:
     // Flags
     bool acting_flag_; // Indicates that an action is being executed
 
-    // 
+    // Width of effort markers
     double arrow_scale = 0.02;
 
-    void js_feedback_callback(const sensor_msgs::msg::JointState::SharedPtr msg)
+    // Width of wrench marker
+    double wrench_scale = 0.01;
+
+    void fdbk_joint_states_callback(const sensor_msgs::msg::JointState::SharedPtr msg)
     {
-        // Update the controller state
+        // Update the feedback
         feedback_ = *msg;
+    }
+
+    void ee_wrench_gravity_compensated_callback(const geometry_msgs::msg::Wrench::SharedPtr msg)
+    {
+        // Update the external wrench measurement
+        external_wrench_.force.x = -((*msg).force.x);
+        external_wrench_.force.y = -((*msg).force.y);
+        external_wrench_.force.z = -((*msg).force.z);
+        external_wrench_.torque.x = -((*msg).torque.x);
+        external_wrench_.torque.y = -((*msg).torque.y);
+        external_wrench_.torque.z = -((*msg).torque.z);
     }
 
     void publish_markers()
@@ -166,44 +208,73 @@ private:
         {
             try {
                 joint_tfs_.at(joint_idx) = tf_buffer_->lookupTransform("base_link", joint_names_.at(joint_idx) + "/INPUT_INTERFACE", tf2::TimePointZero);
-                // RCLCPP_INFO(this->get_logger(), "Transform: %f, %f, %f",
-                //     joint_tfs_.at(joint_idx).transform.translation.x,
-                //     joint_tfs_.at(joint_idx).transform.translation.y,
-                //     joint_tfs_.at(joint_idx).transform.translation.z);
+                RCLCPP_DEBUG(this->get_logger(), "Transform: %f, %f, %f",
+                    joint_tfs_.at(joint_idx).transform.translation.x,
+                    joint_tfs_.at(joint_idx).transform.translation.y,
+                    joint_tfs_.at(joint_idx).transform.translation.z);
             }
             catch (tf2::TransformException & ex) {
                 RCLCPP_DEBUG(this->get_logger(), "Could not transform: %s", ex.what());
             }
 
-            // Construct the marker
+            // Construct effort marker
             effort_markers_.markers.at(joint_idx).header.stamp = get_clock()->now();
             effort_markers_.markers.at(joint_idx).pose.position.x = joint_tfs_.at(joint_idx).transform.translation.x;
             effort_markers_.markers.at(joint_idx).pose.position.y = joint_tfs_.at(joint_idx).transform.translation.y;
             effort_markers_.markers.at(joint_idx).pose.position.z = joint_tfs_.at(joint_idx).transform.translation.z;
-            effort_markers_.markers.at(joint_idx).pose.orientation.x = 0.0;
-            effort_markers_.markers.at(joint_idx).pose.orientation.y = -0.7071068;
-            effort_markers_.markers.at(joint_idx).pose.orientation.z = 0.0;
-            effort_markers_.markers.at(joint_idx).pose.orientation.w = 0.7071068;
 
             // Make the arrow point towards the Z axis of the joint frame
             // Combine the transform's orientation with a -90 degree rotation about the y-axis
-            tf2::Quaternion tf_quat, rot_y_90, result_quat;
-            tf2::fromMsg(joint_tfs_.at(joint_idx).transform.rotation, tf_quat);
+            tf2::Quaternion joint_tf_quat, rot_y_90, result_quat;
+            tf2::fromMsg(joint_tfs_.at(joint_idx).transform.rotation, joint_tf_quat);
 
             // Create a quaternion representing a -90 degree rotation around the y-axis
             rot_y_90.setRPY(0, -M_PI_2, 0);
 
             // Apply the rotation to the transform's orientation
-            result_quat = tf_quat * rot_y_90;
+            result_quat = joint_tf_quat * rot_y_90;
 
             // Use the resulting quaternion for the arrow marker's orientation
             effort_markers_.markers.at(joint_idx).pose.orientation = tf2::toMsg(result_quat);
 
-            effort_markers_.markers.at(joint_idx).scale.x = arrow_scale * feedback_.effort.at(joint_idx);   // Diameter in x
+            // Length and direction of arrow represent effort vector
+            effort_markers_.markers.at(joint_idx).scale.x = arrow_scale * feedback_.effort.at(joint_idx);
         }
 
         // Publish Effort Markers
         effort_markers_publisher_->publish(effort_markers_);
+
+        // Construct External Wrench Marker
+        external_wrench_marker_.pose.position.x = joint_tfs_.at(joint_names_.size() - 1).transform.translation.x;
+        external_wrench_marker_.pose.position.y = joint_tfs_.at(joint_names_.size() - 1).transform.translation.y;
+        external_wrench_marker_.pose.position.z = joint_tfs_.at(joint_names_.size() - 1).transform.translation.z;
+
+        Eigen::Vector3d external_wrench_vec(external_wrench_.force.x, external_wrench_.force.y, external_wrench_.force.z);
+
+        // Set marker length to be proportional to the wrench
+        external_wrench_marker_.scale.x = external_wrench_vec.norm() * wrench_scale; // Scale based on vector magnitude
+        external_wrench_marker_.scale.y = wrench_scale; // Head diameter
+        external_wrench_marker_.scale.z = wrench_scale; // Head length
+
+        // Make marker point in the direction of the wrench
+        external_wrench_vec.normalize();
+        Eigen::Quaterniond quat = Eigen::Quaterniond::FromTwoVectors(Eigen::Vector3d::UnitX(), external_wrench_vec);
+
+        // Set the orientation of the marker
+        external_wrench_marker_.pose.orientation.x = quat.x();
+        external_wrench_marker_.pose.orientation.y = quat.y();
+        external_wrench_marker_.pose.orientation.z = quat.z();
+        external_wrench_marker_.pose.orientation.w = quat.w();
+
+        external_wrench_marker_.header.stamp = get_clock()->now();
+
+        // Publish External Wrench Marker
+        external_wrench_marker_publisher_->publish(external_wrench_marker_);
+
+        RCLCPP_INFO(this->get_logger(), "External Wrench: %f, %f, %f",
+                    external_wrench_.force.x,
+                    external_wrench_.force.y,
+                    external_wrench_.force.z);
     }
 
     void joint_jog_pub()
