@@ -661,7 +661,7 @@ private:
     auto eff_cmd = fdbk.getEffortCommand();
 
     // For 6x6 Jacobian
-    if (ee_jacobian.at(0).determinant() != 0) 
+    if (std::fabs(ee_jacobian.at(0).determinant()) > 1e-2) 
     {
       // Compute the inverse of the Jacobian
       Eigen::MatrixXd ee_jacobian_inverse = ee_jacobian.at(0).inverse();
