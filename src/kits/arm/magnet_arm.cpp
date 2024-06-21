@@ -236,6 +236,7 @@ private:
     double force_gain_ = 0.8;
     // double force_gain_ = 1.0;
     double max_force_thresh = 10.0;
+    double force_target_ = 10.0;
     int time_delay_ = 1000;
     int ctr_ = 0;
 
@@ -247,7 +248,7 @@ private:
     double yaw_vel_gain_ = 0.015;
 
     // Initialize tuned admittance value for low pass filtering
-    double low_pass_admittance_ = 0.01;
+    double low_pass_admittance_ = 0.04;
 
     // Flags
     bool acting_flag_; // Indicates that an action is being executed
@@ -416,30 +417,33 @@ private:
 
         // SE3_jog_publisher_->publish(SE3_jog_msg);
 
-        if (ctr_ >= time_delay_)
-        {
-            force_gain_ = 1.5;
-            RCLCPP_INFO(this->get_logger(), "SETTTTTT");
-        }
-        else
-        {
-            ++ctr_;
-            RCLCPP_INFO(this->get_logger(), "%d %f", ctr_, force_gain_);
-        }
+        // if (ctr_ >= time_delay_)
+        // {
+        //     force_gain_ = 1.5;
+        //     RCLCPP_INFO(this->get_logger(), "SETTTTTT");
+        // }
+        // else
+        // {
+        //     ++ctr_;
+        //     RCLCPP_INFO(this->get_logger(), "%d %f", ctr_, force_gain_);
+        // }
 
         // cmd_ee_wrench_.force.x = -force_gain_ * external_wrench_.force.x;
         // cmd_ee_wrench_.force.x = 0.0;
         // cmd_ee_wrench_.force.y = -force_gain_ * external_wrench_.force.y;
-        cmd_ee_wrench_.force.y = 0.0;
+        // cmd_ee_wrench_.force.y = 0.0;
 
         // Command force along X
-        // if (2.0 < fabs(external_wrench_.force.x))
-        if (-0.0 > external_wrench_.force.x)
+        if (3.0 < fabs(external_wrench_.force.x))
         {
             if (fabs(external_wrench_.force.x) < max_force_thresh)
             {
-                cmd_ee_wrench_.force.x += low_pass_admittance_ * (-force_gain_ * external_wrench_.force.x - cmd_ee_wrench_.force.x);
-                RCLCPP_INFO(this->get_logger(), "%f", fabs(external_wrench_.force.x));
+                double direction = external_wrench_.force.x / fabs(external_wrench_.force.x);
+
+                RCLCPP_INFO(this->get_logger(), "prevcmd: %f, adm: %f, direction: %f ", cmd_ee_wrench_.force.x, low_pass_admittance_, direction);
+
+                cmd_ee_wrench_.force.x += low_pass_admittance_ * (-force_target_ * direction - cmd_ee_wrench_.force.x);
+                RCLCPP_INFO(this->get_logger(), "newcmd: %f", cmd_ee_wrench_.force.x);
             }
             else
             {
@@ -452,32 +456,65 @@ private:
             cmd_ee_wrench_.force.x += low_pass_admittance_ * (0.0 - cmd_ee_wrench_.force.x);
         }
 
-        // // Command force along Z
-        cmd_ee_wrench_.force.z = 0.0;
-        // if (2.0 < fabs(external_wrench_.force.z))
-        // {
-        //     if (fabs(external_wrench_.force.z) < max_force_thresh)
-        //     {
-        //         cmd_ee_wrench_.force.z += low_pass_admittance_ * (-force_gain_ * external_wrench_.force.z - cmd_ee_wrench_.force.z);
-        //         RCLCPP_INFO(this->get_logger(), "%f", fabs(external_wrench_.force.z));
-        //     }
-        //     else
-        //     {
-        //         cmd_ee_wrench_.force.z = -max_force_thresh * external_wrench_.force.z / fabs(external_wrench_.force.z);
-        //         RCLCPP_INFO(this->get_logger(), "HIGHHHHHHH");
-        //     }
-        // }
-        // else
-        // {
-        //     cmd_ee_wrench_.force.z += low_pass_admittance_ * (0.0 - cmd_ee_wrench_.force.z);
-        // }
-        // cmd_ee_wrench_.force.z = -force_gain_ * external_wrench_.force.z;
+        // Command force along Y
+        if (3.0 < fabs(external_wrench_.force.y))
+        {
+            if (fabs(external_wrench_.force.y) < max_force_thresh)
+            {
+                double direction = external_wrench_.force.y / fabs(external_wrench_.force.y);
+
+                // cmd_ee_wrench_.force.z += low_pass_admittance_ * (-force_target_ - cmd_ee_wrench_.force.z);
+                // cmd_ee_wrench_.force.z = -force_target_ * external_wrench_.force.z / fabs(external_wrench_.force.z);
+                RCLCPP_INFO(this->get_logger(), "prevcmd: %f, adm: %f, direction: %f ", cmd_ee_wrench_.force.y, low_pass_admittance_, direction);
+
+                cmd_ee_wrench_.force.y += low_pass_admittance_ * (-force_target_ * direction - cmd_ee_wrench_.force.y);
+                RCLCPP_INFO(this->get_logger(), "newcmd: %f", cmd_ee_wrench_.force.y);
+            }
+            else
+            {
+                cmd_ee_wrench_.force.y = -max_force_thresh * external_wrench_.force.y / fabs(external_wrench_.force.y);
+                RCLCPP_INFO(this->get_logger(), "HIGHHHHHHH");
+            }
+        }
+        else
+        {
+            cmd_ee_wrench_.force.y += low_pass_admittance_ * (0.0 - cmd_ee_wrench_.force.y);
+        }
+
+        // Command force along Z
+        // cmd_ee_wrench_.force.z = 0.0;
+        if (3.0 < fabs(external_wrench_.force.z))
+        {
+            if (fabs(external_wrench_.force.z) < max_force_thresh)
+            {
+                double direction = external_wrench_.force.z / fabs(external_wrench_.force.z);
+
+                // cmd_ee_wrench_.force.z += low_pass_admittance_ * (-force_target_ - cmd_ee_wrench_.force.z);
+                // cmd_ee_wrench_.force.z = -force_target_ * external_wrench_.force.z / fabs(external_wrench_.force.z);
+                RCLCPP_INFO(this->get_logger(), "prevcmd: %f, adm: %f, direction: %f ", cmd_ee_wrench_.force.z, low_pass_admittance_, direction);
+
+                cmd_ee_wrench_.force.z += low_pass_admittance_ * (-force_target_ * direction - cmd_ee_wrench_.force.z);
+                RCLCPP_INFO(this->get_logger(), "newcmd: %f", cmd_ee_wrench_.force.z);
+            }
+            else
+            {
+                cmd_ee_wrench_.force.z = -max_force_thresh * external_wrench_.force.z / fabs(external_wrench_.force.z);
+                RCLCPP_INFO(this->get_logger(), "HIGHHHHHHH");
+            }
+        }
+        else
+        {
+            cmd_ee_wrench_.force.z += low_pass_admittance_ * (0.0 - cmd_ee_wrench_.force.z);
+        }
 
         cmd_ee_wrench_.torque.x = 0.0;
         cmd_ee_wrench_.torque.y = 0.0;
         cmd_ee_wrench_.torque.z = 0.0;
 
-        RCLCPP_INFO(this->get_logger(), "Commanded Wrench: %f, %f, %f",
+        RCLCPP_INFO(this->get_logger(), "External Wrench: %f, %f, %f | Commanded Wrench: %f, %f, %f",
+                    external_wrench_.force.x,
+                    external_wrench_.force.y,
+                    external_wrench_.force.z,
                     cmd_ee_wrench_.force.x,
                     cmd_ee_wrench_.force.y,
                     cmd_ee_wrench_.force.z);

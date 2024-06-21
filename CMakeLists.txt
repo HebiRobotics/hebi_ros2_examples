@@ -91,6 +91,21 @@ ament_target_dependencies(magnet_arm
   tf2_ros
   tf2_geometry_msgs
   visualization_msgs
+  sensor_msgs
+)
+
+add_executable(effortviz_arm src/kits/arm/effortviz_arm.cpp)
+ament_target_dependencies(effortviz_arm
+  rclcpp
+  rclcpp_action
+  hebi_msgs
+  geometry_msgs
+  sensor_msgs
+  hebi_cpp_api
+  tf2
+  tf2_ros
+  tf2_geometry_msgs
+  visualization_msgs
 )
 
 add_executable(omni_base_node src/kits/base/omni_base_node.cpp src/kits/base/util/omni_base.cpp src/kits/base/util/odom_publisher.cpp)
@@ -170,6 +185,7 @@ install(TARGETS
   treaded_base_node
   xbox_arm
   magnet_arm
+  effortviz_arm
   DESTINATION lib/${PROJECT_NAME})
 
 if(moveit_ros_planning_interface_FOUND)
