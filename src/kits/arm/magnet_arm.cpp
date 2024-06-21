@@ -61,6 +61,7 @@ public:
         joint_jog_publisher_ = this->create_publisher<control_msgs::msg::JointJog>("joint_jog", 50);
         cartesian_jog_publisher_ = this->create_publisher<control_msgs::msg::JointJog>("cartesian_jog", 50);
         SE3_jog_publisher_ = this->create_publisher<control_msgs::msg::JointJog>("SE3_jog", 50);
+        cmd_ee_wrench_publisher_ = this->create_publisher<geometry_msgs::msg::Wrench>("cmd_ee_wrench", 50);
         effort_markers_publisher_ = create_publisher<visualization_msgs::msg::MarkerArray>("effort_markers", 10);
         external_wrench_marker_publisher_ = create_publisher<visualization_msgs::msg::MarkerArray>("external_wrench_marker", 10);
 
@@ -73,7 +74,8 @@ public:
         // Action Client
         arm_motion_client_ = rclcpp_action::create_client<hebi_msgs::action::ArmMotion>(this, "arm_motion");
 
-        RCLCPP_INFO(this->get_logger(), "Initializing arms");
+        // Parameters Client
+        parameters_client_ = std::make_shared<rclcpp::SyncParametersClient>(this, "arm_node");
 
         // Initialize Message Vectors
 
@@ -89,7 +91,7 @@ public:
         external_wrench_marker_.markers.push_back(visualization_msgs::msg::Marker{});
         external_wrench_marker_.markers.push_back(visualization_msgs::msg::Marker{});
 
-        // Force
+        // Force Marker
         external_wrench_marker_.markers.at(0).header.frame_id = "base_link";
         external_wrench_marker_.markers.at(0).header.stamp = get_clock()->now();
         external_wrench_marker_.markers.at(0).id = 0;
@@ -103,7 +105,7 @@ public:
         external_wrench_marker_.markers.at(0).color.b = 1.0f;
         external_wrench_marker_.markers.at(0).color.a = 1.0;
 
-        // Torque
+        // Torque Marker
         external_wrench_marker_.markers.at(1).header.frame_id = "base_link";
         external_wrench_marker_.markers.at(1).header.stamp = get_clock()->now();
         external_wrench_marker_.markers.at(1).id = 1;
@@ -148,6 +150,39 @@ public:
             effort_markers_.markers.push_back(effort_marker_);
         }
 
+        external_wrench_prev_.force.x = 0.0;
+        external_wrench_prev_.force.y = 0.0;
+        external_wrench_prev_.force.z = 0.0;
+
+        dForce_.x = 0.0;
+        dForce_.y = 0.0;
+        dForce_.z = 0.0;
+
+        // // Set compliant mode in arm
+        // // Wait for the service to be available
+        // while (!parameters_client_->wait_for_service(std::chrono::seconds(10))) {
+        //     if (!rclcpp::ok()) {
+        //     RCLCPP_ERROR(this->get_logger(), "Interrupted while waiting for the service. Exiting.");
+        //     }
+        //     RCLCPP_INFO(this->get_logger(), "Waiting for the parameters service...");
+        // }
+
+        // // Introduce a 5-second delay
+        // RCLCPP_INFO(this->get_logger(), "Service available, waiting for 5 seconds before calling...");
+        rclcpp::sleep_for(std::chrono::seconds(5));
+
+        // // Set the parameter
+        // auto result = parameters_client_->set_parameters({
+        //     rclcpp::Parameter("compliant_mode", true)
+        // });
+
+        // // Check the result
+        // if (result[0].successful) {
+        //     RCLCPP_INFO(this->get_logger(), "Compliant mode set successfully");
+        // } else {
+        //     RCLCPP_ERROR(this->get_logger(), "Failed to set compliant mode: %s", result[0].reason.c_str());
+        // }
+
         RCLCPP_INFO(this->get_logger(), "Started Magnetic Arm Demo");
     }
 
@@ -155,10 +190,12 @@ private:
   
     // Create Objects
     double rate = 200.0;
+    double dt_ = 1/rate;
     rclcpp::TimerBase::SharedPtr timer_;
     rclcpp::Publisher<control_msgs::msg::JointJog>::SharedPtr joint_jog_publisher_;
     rclcpp::Publisher<control_msgs::msg::JointJog>::SharedPtr cartesian_jog_publisher_;
     rclcpp::Publisher<control_msgs::msg::JointJog>::SharedPtr SE3_jog_publisher_;
+    rclcpp::Publisher<geometry_msgs::msg::Wrench>::SharedPtr cmd_ee_wrench_publisher_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr effort_markers_publisher_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr external_wrench_marker_publisher_;
     rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr fdbk_joint_states_subscriber_;
@@ -166,6 +203,7 @@ private:
     rclcpp_action::Client<hebi_msgs::action::ArmMotion>::SharedPtr arm_motion_client_;
     std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+    std::shared_ptr<rclcpp::SyncParametersClient> parameters_client_;
 
     // Initialize state variables
     sensor_msgs::msg::JointState feedback_;
@@ -173,6 +211,9 @@ private:
     visualization_msgs::msg::MarkerArray effort_markers_;
     visualization_msgs::msg::MarkerArray external_wrench_marker_;
     geometry_msgs::msg::Wrench external_wrench_;
+    geometry_msgs::msg::Wrench external_wrench_prev_;
+    geometry_msgs::msg::Wrench cmd_ee_wrench_{};
+    geometry_msgs::msg::Vector3 dForce_;
 
     std::vector<std::string> joint_names_;
     std::vector<double> home_position_;
@@ -186,6 +227,18 @@ private:
     double yaw_vel_ = 0.0;
 
     // Initialize tuned gain values for velocities
+    double vel_gain_ = 0.0001;
+    double thresh_ = 2.0;
+    double max_thresh_ = 50.0;
+    double x_offset_ = 0.0;
+    double y_offset_ = 0.0;
+    double z_offset_ = 0.0;
+    double force_gain_ = 0.8;
+    // double force_gain_ = 1.0;
+    double max_force_thresh = 10.0;
+    int time_delay_ = 1000;
+    int ctr_ = 0;
+
     double x_vel_gain_ = 0.002;
     double y_vel_gain_ = 0.002;
     double z_vel_gain_ = 0.002;
@@ -194,7 +247,7 @@ private:
     double yaw_vel_gain_ = 0.015;
 
     // Initialize tuned admittance value for low pass filtering
-    double low_pass_admittance_ = 0.05;
+    double low_pass_admittance_ = 0.01;
 
     // Flags
     bool acting_flag_; // Indicates that an action is being executed
@@ -214,9 +267,9 @@ private:
     void ee_wrench_gravity_compensated_callback(const geometry_msgs::msg::Wrench::SharedPtr msg)
     {
         // Update the external wrench measurement
-        external_wrench_.force.x = -((*msg).force.x);
-        external_wrench_.force.y = -((*msg).force.y);
-        external_wrench_.force.z = -((*msg).force.z);
+        external_wrench_.force.x = -((*msg).force.x) + x_offset_;
+        external_wrench_.force.y = -((*msg).force.y) + y_offset_;
+        external_wrench_.force.z = -((*msg).force.z) + z_offset_;
         external_wrench_.torque.x = -((*msg).torque.x);
         external_wrench_.torque.y = -((*msg).torque.y);
         external_wrench_.torque.z = -((*msg).torque.z);
@@ -292,10 +345,144 @@ private:
         // Publish External Wrench Marker
         external_wrench_marker_publisher_->publish(external_wrench_marker_);
 
-        RCLCPP_INFO(this->get_logger(), "External Force: %f, %f, %f",
-                    external_wrench_.force.x,
-                    external_wrench_.force.y,
-                    external_wrench_.force.z);
+        // RCLCPP_INFO(this->get_logger(), "External Force: %f, %f, %f",
+        //             external_wrench_.force.x,
+        //             external_wrench_.force.y,
+        //             external_wrench_.force.z);
+    }
+
+    void force_control()
+    {
+        // Initialize SE(3) Jog Message
+        control_msgs::msg::JointJog SE3_jog_msg;
+
+        SE3_jog_msg.header.stamp = get_clock()->now();
+        SE3_jog_msg.header.frame_id = "";
+        SE3_jog_msg.duration = 1.0/rate; // seconds
+
+        SE3_jog_msg.joint_names = {"roll", "pitch", "yaw", "x", "y", "z"};
+
+        // Displacements
+        for (size_t dof_idx = 0; dof_idx < SE3_jog_msg.joint_names.size(); dof_idx++)
+        {
+            SE3_jog_msg.displacements.push_back(0.0);
+        }
+        // // SE3_jog_msg.displacements.at(0) = roll_vel_;
+        // // SE3_jog_msg.displacements.at(1) = pitch_vel_;
+        // // SE3_jog_msg.displacements.at(2) = yaw_vel_;
+
+        dForce_.x += low_pass_admittance_ * ((external_wrench_.force.x - external_wrench_prev_.force.x) / dt_ - dForce_.x);
+        dForce_.y += low_pass_admittance_ * ((external_wrench_.force.y - external_wrench_prev_.force.y) / dt_ - dForce_.y);
+        dForce_.z += low_pass_admittance_ * ((external_wrench_.force.z - external_wrench_prev_.force.z) / dt_ - dForce_.z);
+
+        external_wrench_prev_ = external_wrench_;
+
+        // SE3_jog_msg.displacements.at(3) =   thresh_ < std::fabs(dForce_.x) && 
+        //                                     std::fabs(dForce_.x) < max_thresh_ ? 
+        //                                     -vel_gain_ * dForce_.x / std::fabs(dForce_.x) : 0.0;
+
+        // SE3_jog_msg.displacements.at(4) =   thresh_ < std::fabs(dForce_.y) && 
+        //                                     std::fabs(dForce_.y) < max_thresh_ ? 
+        //                                     -vel_gain_ * dForce_.y : 0.0;
+
+        // SE3_jog_msg.displacements.at(5) =   thresh_ < std::fabs(dForce_.z) && 
+        //                                     std::fabs(dForce_.z) < max_thresh_ ? 
+        //                                     -vel_gain_ * dForce_.z : 0.0;
+
+        // SE3_jog_msg.displacements.at(4) =   thresh_ < std::fabs(external_wrench_.force.y) && 
+        //                                     std::fabs(external_wrench_.force.y) < max_thresh_ ? 
+        //                                     -vel_gain_ * external_wrench_.force.y : 0.0;
+
+        // SE3_jog_msg.displacements.at(5) =   thresh_ < std::fabs(external_wrench_.force.z) && 
+        //                                     std::fabs(external_wrench_.force.z) < max_thresh_ ? 
+        //                                     -vel_gain_ * external_wrench_.force.z : 0.0;
+
+        // RCLCPP_INFO(this->get_logger(), "External dForce: %f, %f, %f",
+        //             dForce_.x,
+        //             dForce_.y,
+        //             dForce_.z);
+
+        // Velocities should be the same dimension as number of dof
+        for (size_t dof_idx = 0; dof_idx < SE3_jog_msg.joint_names.size(); dof_idx++)
+        {
+            SE3_jog_msg.velocities.push_back(0.0);
+        }
+        // SE3_jog_msg.velocities.at(0) = roll_vel_;
+        // SE3_jog_msg.velocities.at(1) = pitch_vel_;
+        // SE3_jog_msg.velocities.at(2) = yaw_vel_;
+        // SE3_jog_msg.velocities.at(3) = x_vel_;
+        // SE3_jog_msg.velocities.at(4) = y_vel_;
+        // SE3_jog_msg.velocities.at(5) = z_vel_;
+
+        // SE3_jog_publisher_->publish(SE3_jog_msg);
+
+        if (ctr_ >= time_delay_)
+        {
+            force_gain_ = 1.5;
+            RCLCPP_INFO(this->get_logger(), "SETTTTTT");
+        }
+        else
+        {
+            ++ctr_;
+            RCLCPP_INFO(this->get_logger(), "%d %f", ctr_, force_gain_);
+        }
+
+        // cmd_ee_wrench_.force.x = -force_gain_ * external_wrench_.force.x;
+        // cmd_ee_wrench_.force.x = 0.0;
+        // cmd_ee_wrench_.force.y = -force_gain_ * external_wrench_.force.y;
+        cmd_ee_wrench_.force.y = 0.0;
+
+        // Command force along X
+        // if (2.0 < fabs(external_wrench_.force.x))
+        if (-0.0 > external_wrench_.force.x)
+        {
+            if (fabs(external_wrench_.force.x) < max_force_thresh)
+            {
+                cmd_ee_wrench_.force.x += low_pass_admittance_ * (-force_gain_ * external_wrench_.force.x - cmd_ee_wrench_.force.x);
+                RCLCPP_INFO(this->get_logger(), "%f", fabs(external_wrench_.force.x));
+            }
+            else
+            {
+                cmd_ee_wrench_.force.x = -max_force_thresh * external_wrench_.force.x / fabs(external_wrench_.force.x);
+                RCLCPP_INFO(this->get_logger(), "HIGHHHHHHH");
+            }
+        }
+        else
+        {
+            cmd_ee_wrench_.force.x += low_pass_admittance_ * (0.0 - cmd_ee_wrench_.force.x);
+        }
+
+        // // Command force along Z
+        cmd_ee_wrench_.force.z = 0.0;
+        // if (2.0 < fabs(external_wrench_.force.z))
+        // {
+        //     if (fabs(external_wrench_.force.z) < max_force_thresh)
+        //     {
+        //         cmd_ee_wrench_.force.z += low_pass_admittance_ * (-force_gain_ * external_wrench_.force.z - cmd_ee_wrench_.force.z);
+        //         RCLCPP_INFO(this->get_logger(), "%f", fabs(external_wrench_.force.z));
+        //     }
+        //     else
+        //     {
+        //         cmd_ee_wrench_.force.z = -max_force_thresh * external_wrench_.force.z / fabs(external_wrench_.force.z);
+        //         RCLCPP_INFO(this->get_logger(), "HIGHHHHHHH");
+        //     }
+        // }
+        // else
+        // {
+        //     cmd_ee_wrench_.force.z += low_pass_admittance_ * (0.0 - cmd_ee_wrench_.force.z);
+        // }
+        // cmd_ee_wrench_.force.z = -force_gain_ * external_wrench_.force.z;
+
+        cmd_ee_wrench_.torque.x = 0.0;
+        cmd_ee_wrench_.torque.y = 0.0;
+        cmd_ee_wrench_.torque.z = 0.0;
+
+        RCLCPP_INFO(this->get_logger(), "Commanded Wrench: %f, %f, %f",
+                    cmd_ee_wrench_.force.x,
+                    cmd_ee_wrench_.force.y,
+                    cmd_ee_wrench_.force.z);
+
+        cmd_ee_wrench_publisher_->publish(cmd_ee_wrench_);
     }
 
     void joint_jog_pub()
@@ -491,6 +678,8 @@ private:
         // }
 
         publish_markers();
+
+        force_control();
     }
 };
 

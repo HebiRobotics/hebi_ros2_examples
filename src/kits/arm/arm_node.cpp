@@ -80,6 +80,7 @@ public:
     SE3_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("SE3_jog", 50, std::bind(&ArmNode::SE3JogCallback, this, std::placeholders::_1));
     joint_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("joint_trajectory", 50, std::bind(&ArmNode::jointWaypointsCallback, this, std::placeholders::_1));
     cartesian_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("cartesian_trajectory", 50, std::bind(&ArmNode::cartesianWaypointsCallback, this, std::placeholders::_1));
+    cmd_ee_wrench_subscriber_ = this->create_subscription<geometry_msgs::msg::Wrench>("cmd_ee_wrench", 50, std::bind(&ArmNode::WrenchCommandCallback, this, std::placeholders::_1));
 
     // Publishers
     arm_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("fdbk_joint_states", 50);
@@ -127,7 +128,20 @@ public:
     // (this also acts as a loop-rate limiter so no 'sleep' is needed)
     if (!arm_->update())
       RCLCPP_WARN(this->get_logger(), "Error Getting Feedback -- Check Connection");
-    else if (!arm_->send())
+    else if (force_control_flag_)
+    {
+      Eigen::VectorXd pos_nan(6), vel_nan(6);
+      pos_nan.fill(std::numeric_limits<double>::quiet_NaN());
+      vel_nan.fill(std::numeric_limits<double>::quiet_NaN());
+
+      hebi::GroupCommand& command = arm_->pendingCommand();
+      command.setPosition(pos_nan);
+      command.setVelocity(vel_nan);
+
+      Eigen::VectorXd gravCompEffort = command.getEffort();
+      command.setEffort(desired_efforts_ + gravCompEffort);
+    }
+    if (!arm_->send())
       RCLCPP_WARN(this->get_logger(), "Error Sending Commands -- Check Connection");
   }
 
@@ -137,6 +151,7 @@ private:
 
   bool homed_flag_ = false; // Indicates that the end-effector has been homed initially
   bool acting_flag_ = false; // Indicates that an action is being executed
+  bool force_control_flag_ = false; // Indicates whether or not force control is active
 
   bool compliant_mode_{false};
   Eigen::VectorXd home_position_;
@@ -149,12 +164,15 @@ private:
 
   sensor_msgs::msg::JointState state_msg_;
   geometry_msgs::msg::Inertia center_of_mass_message_;
+  Eigen::VectorXd desired_ee_wrench_ = Eigen::VectorXd::Zero(6);
+  Eigen::VectorXd desired_efforts_ = Eigen::VectorXd::Zero(6);
 
   rclcpp::Subscription<control_msgs::msg::JointJog>::SharedPtr joint_jog_subscriber_;
   rclcpp::Subscription<control_msgs::msg::JointJog>::SharedPtr cartesian_jog_subscriber_;
   rclcpp::Subscription<control_msgs::msg::JointJog>::SharedPtr SE3_jog_subscriber_;
   rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr cartesian_waypoint_subscriber_;
   rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr joint_waypoint_subscriber_;
+  rclcpp::Subscription<geometry_msgs::msg::Wrench>::SharedPtr cmd_ee_wrench_subscriber_; // For moment/force control of the end-effector
 
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr arm_state_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Inertia>::SharedPtr center_of_mass_publisher_;
@@ -614,6 +632,27 @@ private:
     updateSE3Waypoints(use_traj_times_, times, xyz_positions, &euler_angles, false);
   }
 
+  // Control the moment/force/wrench at the end-effector
+  void WrenchCommandCallback(const geometry_msgs::msg::Wrench::SharedPtr wrench_msg)
+  {
+    if (!homed_flag_ || acting_flag_)
+      return;
+
+    if (compliant_mode_) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Deactivate compliant mode to use wrench control");
+      return;
+    }
+
+    desired_ee_wrench_(0) = (*wrench_msg).force.x;
+    desired_ee_wrench_(1) = (*wrench_msg).force.y;
+    desired_ee_wrench_(2) = (*wrench_msg).force.z;
+    desired_ee_wrench_(3) = (*wrench_msg).torque.x;
+    desired_ee_wrench_(4) = (*wrench_msg).torque.y;
+    desired_ee_wrench_(5) = (*wrench_msg).torque.z;
+
+    force_control_flag_ = true;
+  }
+
   /////////////////////////// UTILITY FUNCTIONS ///////////////////////////
 
   void publishState() {
@@ -661,7 +700,7 @@ private:
     auto eff_cmd = fdbk.getEffortCommand();
 
     // For 6x6 Jacobian
-    if (std::fabs(ee_jacobian.at(0).determinant()) > 1e-2) 
+    if (std::fabs(ee_jacobian.at(0).determinant()) > 1e-3) 
     {
       // Compute the inverse of the Jacobian
       Eigen::MatrixXd ee_jacobian_inverse = ee_jacobian.at(0).inverse();
@@ -685,10 +724,19 @@ private:
       ee_wrench_gravcomp_msg.torque.x = ee_wrench_gravcomp(3);
       ee_wrench_gravcomp_msg.torque.y = ee_wrench_gravcomp(4);
       ee_wrench_gravcomp_msg.torque.z = ee_wrench_gravcomp(5);
+
+      // Calculate the desired efforts for moment/wrench/force control
+      if (force_control_flag_)
+      {
+        desired_efforts_ = ee_jacobian.at(0).transpose() * desired_ee_wrench_;
+        // RCLCPP_INFO(this->get_logger(), "%f %f %f %f %f %f", desired_efforts_(0), desired_efforts_(1), desired_efforts_(2), desired_efforts_(3), desired_efforts_(4), desired_efforts_(5));
+      }
     }
     else
     {
       RCLCPP_WARN(this->get_logger(), "Singularity!");
+
+      desired_efforts_ = Eigen::VectorXd::Zero(6);
     }
 
     ee_wrench_raw_publisher_->publish(ee_wrench_raw_msg);
