@@ -96,7 +96,7 @@ public:
         external_wrench_markers_.markers.at(1).header.stamp = get_clock()->now();
         external_wrench_markers_.markers.at(1).id = 1;
         external_wrench_markers_.markers.at(1).type = visualization_msgs::msg::Marker::ARROW;
-        external_wrench_markers_.markers.at(1).action = visualization_msgs::msg::Marker::DELETE; 
+        external_wrench_markers_.markers.at(1).action = visualization_msgs::msg::Marker::ADD;
         external_wrench_markers_.markers.at(1).scale.x = wrench_scale_;   
         external_wrench_markers_.markers.at(1).scale.y = wrench_scale_;   
         external_wrench_markers_.markers.at(1).scale.z = wrench_scale_;        
