@@ -77,7 +77,7 @@ def generate_launch_description():
   )
 
   rviz_config_file = PathJoinSubstitution(
-    [FindPackageShare("hebi_ros2_examples"), "config/rviz", "magnet_arm.rviz"]
+    [FindPackageShare("hebi_ros2_examples"), "config/rviz", "effortviz_arm.rviz"]
   )
   rviz_node = Node(
       package="rviz2",
