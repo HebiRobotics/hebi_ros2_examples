@@ -175,7 +175,7 @@ install(PROGRAMS
 
 # Install Python utilities
 install(PROGRAMS
-  hebi_ros2_examples/config_utils.py
+  hebi_ros2_examples/hebi_util.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
