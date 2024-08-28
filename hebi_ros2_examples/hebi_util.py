@@ -3,9 +3,9 @@ import os
 from hebi.util import create_mobile_io
 from time import sleep
 
-def create_mobile_io_from_config(lookup, config, config_file):
+def create_mobile_io_from_config(lookup, config, config_file, node):
 
-    cfg_dir = os.path.dirname(os.path.abspath(config_file)) # If mobile_io becomes a unique field in config, this will no longer be required
+    cfg_dir = os.path.dirname(os.path.abspath(config_file))  # If mobile_io becomes a unique field in config, this will no longer be required
 
     # Load Mobile IO config as a dictionary
     mobile_io_dict = {}
@@ -27,21 +27,19 @@ def create_mobile_io_from_config(lookup, config, config_file):
 
     # Set up Mobile IO from config
     mobile_io = None
-    if any(mobile_io_dict):
-        print('Waiting for Mobile IO device to come online...')
-        num_retries = 10
+    node.get_logger().info('Waiting for Mobile IO device to come online...')
 
-        for i in range(num_retries):
-            mobile_io = create_mobile_io(lookup, mobile_io_dict['family'], mobile_io_dict['name'])
+    while mobile_io is None:
+        mobile_io = create_mobile_io(lookup, mobile_io_dict['family'], mobile_io_dict['name'])
 
-            if mobile_io is None:
-                print(f"Couldn't find Mobile IO. Check name, family, or device status...")
-                sleep(1)
-                if i == num_retries - 1:
-                    raise RuntimeError("Failed to create Mobile IO from config.")
+        if mobile_io is None:
+            node.get_logger().warn(f"Couldn't find Mobile IO. Check name, family, or device status...")
+            sleep(1)
 
-        mobile_io.send_layout(layout_file=mobile_io_dict['layout'])
-        mobile_io.update()
+    node.get_logger().info('Mobile IO device found. Sending layout...')
+    mobile_io.send_layout(layout_file=mobile_io_dict['layout'])
+    mobile_io.update()
+    node.get_logger().info('Mobile IO successfully initialized.')
 
     return mobile_io
 

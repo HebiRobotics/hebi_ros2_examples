@@ -1,7 +1,7 @@
 import os
 from launch import LaunchDescription
 from launch.actions import SetLaunchConfiguration, DeclareLaunchArgument, LogInfo
-from launch.substitutions import LaunchConfiguration, EqualsSubstitution
+from launch.substitutions import LaunchConfiguration, EqualsSubstitution, PythonExpression
 from launch_ros.actions import Node
 from launch.conditions import IfCondition
 
@@ -54,6 +54,7 @@ def generate_launch_description():
     mobile_io_node = Node(
         package='hebi_ros2_examples',
         executable='mobile_io_node.py',
+        # name=PythonExpression(["'", LaunchConfiguration('prefix'), "' + 'mobile_io_node'"]),
         name='mobile_io_node',
         output='screen',
         parameters=[
