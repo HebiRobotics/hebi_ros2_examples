@@ -170,6 +170,7 @@ install(PROGRAMS
   scripts/mobile_io/teach_repeat_io.py
   scripts/mobile_io/rosie_io.py
   scripts/mobile_io/hexapod_io.py
+  scripts/ex_impedance_control_cartesian_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -182,6 +183,7 @@ install(PROGRAMS
 install(DIRECTORY
   launch
   config
+  rviz
   DESTINATION share/${PROJECT_NAME})
 
 install(DIRECTORY

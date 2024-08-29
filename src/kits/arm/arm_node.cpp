@@ -15,6 +15,9 @@
 #include "hebi_cpp_api/robot_config.hpp"
 #include "hebi_cpp_api/arm/arm.hpp"
 
+#include <chrono>
+#include <thread>
+
 
 namespace arm = hebi::experimental::arm;
 
@@ -29,15 +32,17 @@ public:
   ArmNode() : Node("arm_node") {
 
   // Parameter Description
+  // Parameters passed into the node
   auto config_file_des = rcl_interfaces::msg::ParameterDescriptor{};
   auto config_package_des = rcl_interfaces::msg::ParameterDescriptor{};
-  auto prefix_des = rcl_interfaces::msg::ParameterDescriptor{};
+
+  // Parameters passed through config file changed during runtime
   auto ik_seed_des = rcl_interfaces::msg::ParameterDescriptor{};
   auto use_traj_times_des = rcl_interfaces::msg::ParameterDescriptor{};
   auto compliant_mode_des = rcl_interfaces::msg::ParameterDescriptor{};
 
-  config_file_des.description = "Config file for the arm of type .cfg.yaml";
-  prefix_des.description = "";
+  config_file_des.description = "Config file for the arm of type .cfg.yaml.";
+  config_package_des.description = "Package containg the config file.";
   ik_seed_des.description = "Seed for inverse kinematics. Can be changed during runtime.";
   use_traj_times_des.description = "Can be changed during runtime.";
   compliant_mode_des.description = "No arm motion can be commanded in compliant mode. Can be changed during runtime.";
@@ -45,12 +50,11 @@ public:
   // Declare default parameter values
   this->declare_parameter("config_file", rclcpp::PARAMETER_STRING);
   this->declare_parameter("config_package", rclcpp::PARAMETER_STRING);
-  this->declare_parameter("prefix", "");
   this->declare_parameter("ik_seed", rclcpp::PARAMETER_DOUBLE_ARRAY);
   this->declare_parameter("use_traj_times", true);
   this->declare_parameter("compliant_mode", false);
 
-  // Get the parameters that are passed into the arm_node
+  // Get the parameters that are passed into the node
   config_package_ = this->get_parameter("config_package").as_string();
   config_file_ = this->get_parameter("config_file").as_string();
 
@@ -95,13 +99,15 @@ public:
   timer_ = this->create_wall_timer(std::chrono::milliseconds(5), std::bind(&ArmNode::publishState, this));
 
   // Go to home position
-  try {
-    arm_->update();
-    arm_->setGoal(arm::Goal::createFromPosition(home_position_));
-  }
-  catch (const std::runtime_error& e) {
-    RCLCPP_ERROR(this->get_logger(), "Could not go to home position: %s", e.what());
-    return;
+  if (go_to_home_) {
+    try {
+      arm_->update();
+      arm_->setGoal(arm::Goal::createFromPosition(home_position_));
+    }
+    catch (const std::runtime_error& e) {
+      RCLCPP_ERROR(this->get_logger(), "Could not go to home position: %s", e.what());
+      return;
+    }
   }
 
   // Raise homed flag only after it reaches the home position
@@ -132,7 +138,8 @@ private:
   bool acting_flag_ = false; // Indicates that an action is being executed
 
   bool compliant_mode_{false};
-  Eigen::VectorXd home_position_;
+  Eigen::VectorXd home_position_ = Eigen::VectorXd::Constant(6, 0.01); // Default values are close to zero to avoid singularity
+  bool go_to_home_{false};
   int num_joints_;
 
   Eigen::VectorXd ik_seed_;
@@ -805,65 +812,84 @@ private:
     // Create arm from config
     arm_ = arm::Arm::create(*arm_config);
 
-    // Keep retrying if arm not found
-    while (!arm_) {
-      RCLCPP_ERROR(this->get_logger(), "Failed to create arm, retrying...");
-
-      // Retry
-      arm_ = arm::Arm::create(*arm_config);
+    // Terminate if arm not found
+    if (!arm_) {
+      RCLCPP_ERROR(this->get_logger(), "Failed to create arm!");
+      return false;
     }
     RCLCPP_INFO(this->get_logger(), "Arm connected.");
+    num_joints_ = arm_->size();
 
-    // Get the "home" position for the arm
-    std::vector<double> home_position_vector;
-    if (this->has_parameter("home_position")) {
-      this->get_parameter("home_position", home_position_vector);
-      RCLCPP_INFO(this->get_logger(), "Found and successfully read 'home_position' parameter");
-    } else {
-      RCLCPP_WARN(this->get_logger(), "Could not find/read 'home_position' parameter; defaulting to all zeros!");
-    }
-    home_position_ = Eigen::VectorXd(arm_->size());
-    if (home_position_vector.empty()) {
-      for (size_t i = 0; i < static_cast<size_t>(home_position_.size()); ++i) {
-        home_position_[i] = 0.01; // Avoid common singularities by being slightly off from zero
+    // Check if home position is provided
+    if (arm_config->getUserData().hasFloatList("home_position")) {
+
+      // Check that home_position has the right length
+      if (arm_config->getUserData().getFloatList("home_position").size() != num_joints_) {
+        errors.push_back("HEBI config \"user_data\"'s \"home_position\" field must have the same number of elements as degrees of freedom!");
+        std::cout << num_joints_ << std::endl;
       }
-    } else if (home_position_vector.size() != arm_->size()) {
-      RCLCPP_ERROR(this->get_logger(), "'home_position' parameter not the same length as HRDF file's number of DoF! Aborting!");
-      return false;
-    } else {
-      for (size_t i = 0; i < static_cast<size_t>(home_position_.size()); ++i) {
-        home_position_[i] = home_position_vector[i];
+      else {
+        home_position_ = Eigen::Map<Eigen::VectorXd>(arm_config->getUserData().getFloatList("home_position").data(), arm_config->getUserData().getFloatList("home_position").size());
+        go_to_home_ = true;
+        RCLCPP_INFO(this->get_logger(), "Found and successfully read 'home_position' parameter.");
       }
+    } else {
+      errors.push_back("\"home_position\" not provided in config file. Not traveling to home.");
+      home_position_.fill(std::numeric_limits<double>::quiet_NaN());
     }
 
-    // Get the "ik_seed" for the arm
-    std::vector<double> ik_seed_vector;
-    if (this->has_parameter("ik_seed")) {
-      this->get_parameter("ik_seed", ik_seed_vector);
-      if (ik_seed_vector.size() == 0)
-      {
-        RCLCPP_WARN(this->get_logger(), "'ik_seed' parameter is empty; Setting use_ik_seed to false!");
+    // Check if IK seed is provided
+    if (arm_config->getUserData().hasFloatList("ik_seed")) {
+
+      // Check that ik_seed has the right length
+      if (arm_config->getUserData().getFloatList("ik_seed").size() != num_joints_) {
+        errors.push_back("HEBI config \"user_data\"'s \"ik_seed\" field must have the same number of elements as degrees of freedom!");
         use_ik_seed_ = false;
+        std::cout << num_joints_ << std::endl;
       }
-      else
-      {
+      else {
+        ik_seed_ = Eigen::Map<Eigen::VectorXd>(arm_config->getUserData().getFloatList("ik_seed").data(), arm_config->getUserData().getFloatList("ik_seed").size());
         RCLCPP_INFO(this->get_logger(), "Found and successfully read 'ik_seed' parameter");
-        if (ik_seed_vector.size() != this->arm_->size()) {
-          RCLCPP_WARN(this->get_logger(), "'ik_seed' parameter not the same length as HRDF file's number of DoF! Setting use_ik_seed to false!");
-          use_ik_seed_ = false;
-        }
-        else 
-        {
-          ik_seed_ = Eigen::VectorXd(arm_->size());
-          for (size_t i = 0; i < ik_seed_vector.size(); ++i) {
-            ik_seed_[i] = ik_seed_vector[i];
-          }
-        }
       }
     } else {
-      RCLCPP_WARN(this->get_logger(), "Could not find/read 'ik_seed' parameter; Setting use_ik_seed to false!");
+      errors.push_back("\"ik_seed\" not provided in config file. Setting use_ik_seed to false.");
       use_ik_seed_ = false;
     }
+
+    // If there are errors, print them and throw an exception
+    if (!errors.empty()) {
+        for (const auto& error : errors) {
+          RCLCPP_ERROR(this->get_logger(), error.c_str());
+        }
+    }
+
+    // // Get the "ik_seed" for the arm
+    // if (this->has_parameter("ik_seed")) {
+    //   this->get_parameter("ik_seed", ik_seed_vector);
+    //   if (ik_seed_vector.size() == 0)
+    //   {
+    //     RCLCPP_WARN(this->get_logger(), "'ik_seed' parameter is empty; Setting use_ik_seed to false!");
+    //     use_ik_seed_ = false;
+    //   }
+    //   else
+    //   {
+    //     RCLCPP_INFO(this->get_logger(), "Found and successfully read 'ik_seed' parameter");
+    //     if (ik_seed_vector.size() != this->arm_->size()) {
+    //       RCLCPP_WARN(this->get_logger(), "'ik_seed' parameter not the same length as HRDF file's number of DoF! Setting use_ik_seed to false!");
+    //       use_ik_seed_ = false;
+    //     }
+    //     else 
+    //     {
+    //       ik_seed_ = Eigen::VectorXd(arm_->size());
+    //       for (size_t i = 0; i < ik_seed_vector.size(); ++i) {
+    //         ik_seed_[i] = ik_seed_vector[i];
+    //       }
+    //     }
+    //   }
+    // } else {
+    //   RCLCPP_WARN(this->get_logger(), "Could not find/read 'ik_seed' parameter; Setting use_ik_seed to false!");
+    //   use_ik_seed_ = false;
+    // }
 
     // Get the "use_traj_times" for the arm
     if (this->has_parameter("use_traj_times")) {
@@ -886,8 +912,6 @@ private:
     }
     // TODO: Figure out a way to get link names from the arm, so it doesn't need to be input separately
     state_msg_.name = full_names;
-    num_joints_ = arm_->size();
-
     return true;
   }
 };

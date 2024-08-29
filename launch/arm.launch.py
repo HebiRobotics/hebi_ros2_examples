@@ -9,7 +9,7 @@ from launch_ros.substitutions import FindPackageShare
 from launch.conditions import IfCondition
 from ament_index_python.packages import get_package_share_directory  # Correct import
 
-
+# Helper OpaqueFunction for extracting the arm's name
 def setup_hebi_arm(context, *args, **kwargs):
     config_package = LaunchConfiguration('config_package').perform(context)
     config_file = LaunchConfiguration('config_file').perform(context)
@@ -22,8 +22,6 @@ def setup_hebi_arm(context, *args, **kwargs):
         config_data = yaml.safe_load(file)
         hrdf_path = config_data['hrdf']
         hebi_arm = os.path.basename(hrdf_path).split('.')[0]  # Extract the model name (e.g., A-2085-06)
-        print("yoooo")
-        print(hebi_arm)
 
     return [SetLaunchConfiguration('hebi_arm', hebi_arm)]
 
@@ -32,33 +30,41 @@ def generate_launch_description():
 
     # Declare arguments
     declared_arguments = [
+        
+        # Config files
         DeclareLaunchArgument(
             "config_file",
             default_value="None",
-            description="Config file for the mobile_io of type `.cfg.yaml`",
+            description="Config file for the arm of type `.cfg.yaml`",
         ),
         DeclareLaunchArgument(
             "config_package",
-            default_value="hebi_description",  # Default set to 'hebi_description'
-            description="Description package of the mobile_io_config file. Usually the argument is not set, \
-                        it enables use of a custom description.",
+            default_value="hebi_description",  
+            description="Package of the arm's config file. Usually the argument is not set, \
+                        it enables use of a custom config.",
         ),
+
+        # Description
         DeclareLaunchArgument(
             "description_package",
-            default_value="hebi_description",  # Default set to 'hebi_description'
-            description="Description package of the mobile_io_config file. Usually the argument is not set, \
+            default_value="hebi_description",  
+            description="Description package of the urdf file. Usually the argument is not set, \
                         it enables use of a custom description.",
         ),
-        DeclareLaunchArgument(
-            "prefix",
-            default_value="",
-            description="Prefix for the mobile_io. Usually the argument is not set",
-        ),
+
+        # RViz stuff
         DeclareLaunchArgument(
             "use_rviz",
             default_value="true",
             description="Whether to start RViz.",
-        )
+        ),
+
+        # Prefix
+        DeclareLaunchArgument(
+            "prefix",
+            default_value="",
+            description="Prefix for the arm. Usually the argument is not set",
+        ),
     ]
 
     prefix = LaunchConfiguration("prefix")
