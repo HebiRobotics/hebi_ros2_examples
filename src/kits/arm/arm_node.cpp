@@ -12,6 +12,7 @@
 
 #include "hebi_cpp_api/group_command.hpp"
 #include "hebi_cpp_api/robot_model.hpp"
+#include "hebi_cpp_api/robot_config.hpp"
 #include "hebi_cpp_api/arm/arm.hpp"
 
 
@@ -27,108 +28,103 @@ public:
   
   ArmNode() : Node("arm_node") {
 
-    // Parameter Description
-    auto names_des = rcl_interfaces::msg::ParameterDescriptor{};
-    auto families_des = rcl_interfaces::msg::ParameterDescriptor{};
-    auto gains_package_des = rcl_interfaces::msg::ParameterDescriptor{};
-    auto gains_file_des = rcl_interfaces::msg::ParameterDescriptor{};
-    auto hrdf_package_des = rcl_interfaces::msg::ParameterDescriptor{};
-    auto hrdf_file_des = rcl_interfaces::msg::ParameterDescriptor{};
-    auto home_position_des = rcl_interfaces::msg::ParameterDescriptor{};
-    auto ik_seed_des = rcl_interfaces::msg::ParameterDescriptor{};
-    auto prefix_des = rcl_interfaces::msg::ParameterDescriptor{};
-    auto use_traj_times_des = rcl_interfaces::msg::ParameterDescriptor{};
-    auto compliant_mode_des = rcl_interfaces::msg::ParameterDescriptor{};
+  // Parameter Description
+  auto config_file_des = rcl_interfaces::msg::ParameterDescriptor{};
+  auto config_package_des = rcl_interfaces::msg::ParameterDescriptor{};
+  auto prefix_des = rcl_interfaces::msg::ParameterDescriptor{};
+  auto ik_seed_des = rcl_interfaces::msg::ParameterDescriptor{};
+  auto use_traj_times_des = rcl_interfaces::msg::ParameterDescriptor{};
+  auto compliant_mode_des = rcl_interfaces::msg::ParameterDescriptor{};
 
-    names_des.description = "Array of Names of the HEBI Modules";
-    families_des.description = "Array of Families of HEBI Modules";
-    gains_package_des.description = "ROS package containing the gains file for your HEBI arm";
-    gains_file_des.description = "Relative path of the gains file from the gains_package";
-    hrdf_package_des.description = "ROS package containing the HRDF file for your HEBI arm";
-    hrdf_file_des.description = "Relative path of the HRDF file from the hrdf_package";
-    home_position_des.description = "Array of float values to move your arm after initialization.";
-    ik_seed_des.description = "Seed for inverse kinematics. Can be changed during runtime.";
-    prefix_des.description = "";
-    use_traj_times_des.description = "";
-    compliant_mode_des.description = "No arm motion can be commanded in compliant mode. Can be changed during runtime.";
+  config_file_des.description = "Config file for the arm of type .cfg.yaml";
+  prefix_des.description = "";
+  ik_seed_des.description = "Seed for inverse kinematics. Can be changed during runtime.";
+  use_traj_times_des.description = "Can be changed during runtime.";
+  compliant_mode_des.description = "No arm motion can be commanded in compliant mode. Can be changed during runtime.";
 
-    // Declare default parameter values
-    this->declare_parameter("names", rclcpp::PARAMETER_STRING_ARRAY);
-    this->declare_parameter("families", rclcpp::PARAMETER_STRING_ARRAY);
-    this->declare_parameter("gains_package", rclcpp::PARAMETER_STRING);
-    this->declare_parameter("gains_file", rclcpp::PARAMETER_STRING);
-    this->declare_parameter("hrdf_package", rclcpp::PARAMETER_STRING);
-    this->declare_parameter("hrdf_file", rclcpp::PARAMETER_STRING);
-    this->declare_parameter("home_position", rclcpp::PARAMETER_DOUBLE_ARRAY);
-    this->declare_parameter("ik_seed", rclcpp::PARAMETER_DOUBLE_ARRAY);
-    this->declare_parameter("prefix", "");
-    this->declare_parameter("use_traj_times", true);
-    this->declare_parameter("compliant_mode", false);
+  // Declare default parameter values
+  this->declare_parameter("config_file", rclcpp::PARAMETER_STRING);
+  this->declare_parameter("config_package", rclcpp::PARAMETER_STRING);
+  this->declare_parameter("prefix", "");
+  this->declare_parameter("ik_seed", rclcpp::PARAMETER_DOUBLE_ARRAY);
+  this->declare_parameter("use_traj_times", true);
+  this->declare_parameter("compliant_mode", false);
 
-    // Parameter subscriber
-    parameter_event_handler_ = std::make_shared<rclcpp::ParameterEventHandler>(this);
+  // Get the parameters that are passed into the arm_node
+  config_package_ = this->get_parameter("config_package").as_string();
+  config_file_ = this->get_parameter("config_file").as_string();
 
-    // Parameter callbacks
-    ik_seed_callback_handle_ = parameter_event_handler_->add_parameter_callback("ik_seed", std::bind(&ArmNode::ikSeedCallback, this, std::placeholders::_1));
-    use_traj_times_callback_handle_ = parameter_event_handler_->add_parameter_callback("use_traj_times", std::bind(&ArmNode::useTrajTimesCallback, this, std::placeholders::_1));
-    compliant_mode_callback_handle_ = parameter_event_handler_->add_parameter_callback("compliant_mode", std::bind(&ArmNode::compliantModeCallback, this, std::placeholders::_1));
-
-    // Subscribers
-    joint_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("joint_jog", 50, std::bind(&ArmNode::jointJogCallback, this, std::placeholders::_1));
-    cartesian_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("cartesian_jog", 50, std::bind(&ArmNode::cartesianJogCallback, this, std::placeholders::_1));
-    SE3_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("SE3_jog", 50, std::bind(&ArmNode::SE3JogCallback, this, std::placeholders::_1));
-    joint_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("joint_trajectory", 50, std::bind(&ArmNode::jointWaypointsCallback, this, std::placeholders::_1));
-    cartesian_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("cartesian_trajectory", 50, std::bind(&ArmNode::cartesianWaypointsCallback, this, std::placeholders::_1));
-
-    // Publishers
-    arm_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("fdbk_joint_states", 50);
-    center_of_mass_publisher_ = this->create_publisher<geometry_msgs::msg::Inertia>("inertia", 50);
-    end_effector_pose_publisher_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("ee_pose", 50);
-    
-    // start the action server
-    action_server_ = rclcpp_action::create_server<ArmMotion>(
-      this,
-      "arm_motion",
-      std::bind(&ArmNode::handleArmMotionGoal, this, std::placeholders::_1, std::placeholders::_2),
-      std::bind(&ArmNode::handleArmMotionCancel, this, std::placeholders::_1),
-      std::bind(&ArmNode::handleArmMotionAccepted, this, std::placeholders::_1));
-
-    // Initialize the arm
-    if (!initializeArm()) {
-      RCLCPP_ERROR(this->get_logger(), "Could not initialize arm!");
-      return;
-    }
-
-    timer_ = this->create_wall_timer(std::chrono::milliseconds(5), std::bind(&ArmNode::publishState, this));
-
-    // Go to home position
-    try {
-      arm_->update();
-      arm_->setGoal(arm::Goal::createFromPosition(home_position_));
-    }
-    catch (const std::runtime_error& e) {
-      RCLCPP_ERROR(this->get_logger(), "Could not go to home position: %s", e.what());
-      return;
-    }
-
-    // Raise homed flag only after it reaches the home position
-    while (!arm_->atGoal() && rclcpp::ok()) {
-      update();
-    }  
-    homed_flag_ = true;
-    RCLCPP_INFO(this->get_logger(), "Reached home position");
+  // Initialize the arm with configs
+  if (!initializeArm()) {
+    RCLCPP_ERROR(this->get_logger(), "Could not initialize arm!");
+    return;
   }
 
-  void update() {
-    // Update feedback, and command the arm to move along its planned path
-    // (this also acts as a loop-rate limiter so no 'sleep' is needed)
-    if (!arm_->update())
-      RCLCPP_WARN(this->get_logger(), "Error Getting Feedback -- Check Connection");
-    else if (!arm_->send())
-      RCLCPP_WARN(this->get_logger(), "Error Sending Commands -- Check Connection");
+  // Create parameter callbacks for the remaining parameters, which can be changed during runtime
+  parameter_event_handler_ = std::make_shared<rclcpp::ParameterEventHandler>(this);
+
+  // Parameter callbacks
+  ik_seed_callback_handle_ = parameter_event_handler_->add_parameter_callback("ik_seed", std::bind(&ArmNode::ikSeedCallback, this, std::placeholders::_1));
+  use_traj_times_callback_handle_ = parameter_event_handler_->add_parameter_callback("use_traj_times", std::bind(&ArmNode::useTrajTimesCallback, this, std::placeholders::_1));
+  compliant_mode_callback_handle_ = parameter_event_handler_->add_parameter_callback("compliant_mode", std::bind(&ArmNode::compliantModeCallback, this, std::placeholders::_1));
+
+  // Common Subscribers
+  joint_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("joint_jog", 50, std::bind(&ArmNode::jointJogCallback, this, std::placeholders::_1));
+  cartesian_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("cartesian_jog", 50, std::bind(&ArmNode::cartesianJogCallback, this, std::placeholders::_1));
+  SE3_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("SE3_jog", 50, std::bind(&ArmNode::SE3JogCallback, this, std::placeholders::_1));
+  joint_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("joint_trajectory", 50, std::bind(&ArmNode::jointWaypointsCallback, this, std::placeholders::_1));
+  cartesian_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("cartesian_trajectory", 50, std::bind(&ArmNode::cartesianWaypointsCallback, this, std::placeholders::_1));
+
+  // Subscribers specific to plugins
+
+
+  // Publishers
+  arm_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("fdbk_joint_states", 50);
+  center_of_mass_publisher_ = this->create_publisher<geometry_msgs::msg::Inertia>("inertia", 50);
+  end_effector_pose_publisher_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("ee_pose", 50);
+  
+  // start the action server
+  action_server_ = rclcpp_action::create_server<ArmMotion>(
+    this,
+    "arm_motion",
+    std::bind(&ArmNode::handleArmMotionGoal, this, std::placeholders::_1, std::placeholders::_2),
+    std::bind(&ArmNode::handleArmMotionCancel, this, std::placeholders::_1),
+    std::bind(&ArmNode::handleArmMotionAccepted, this, std::placeholders::_1)
+  );
+
+  timer_ = this->create_wall_timer(std::chrono::milliseconds(5), std::bind(&ArmNode::publishState, this));
+
+  // Go to home position
+  try {
+    arm_->update();
+    arm_->setGoal(arm::Goal::createFromPosition(home_position_));
   }
+  catch (const std::runtime_error& e) {
+    RCLCPP_ERROR(this->get_logger(), "Could not go to home position: %s", e.what());
+    return;
+  }
+
+  // Raise homed flag only after it reaches the home position
+  while (!arm_->atGoal() && rclcpp::ok()) {
+    update();
+  }  
+  homed_flag_ = true;
+  RCLCPP_INFO(this->get_logger(), "Reached home position");
+}
+
+void update() {
+  // Update feedback, and command the arm to move along its planned path
+  // (this also acts as a loop-rate limiter so no 'sleep' is needed)
+  if (!arm_->update())
+    RCLCPP_WARN(this->get_logger(), "Error Getting Feedback -- Check Connection");
+  else if (!arm_->send())
+    RCLCPP_WARN(this->get_logger(), "Error Sending Commands -- Check Connection");
+}
 
 private:
+
+  std::string config_package_ = "";
+  std::string config_file_ = "";
 
   std::unique_ptr<arm::Arm> arm_;
 
@@ -683,13 +679,13 @@ private:
   // Each row is a separate joint; each column is a separate waypoint.
   void updateJointWaypoints(const bool use_traj_times, const Eigen::VectorXd& times, const Eigen::MatrixXd& angles, const Eigen::MatrixXd& velocities, const Eigen::MatrixXd& accelerations) {
     // Data sanity check:
-    if (angles.rows() != velocities.rows()                    || // Number of joints
-        angles.rows() != accelerations.rows()                 ||
-        angles.rows() != static_cast<long int>(arm_->size())  ||
-        angles.cols() != velocities.cols()                    || // Number of waypoints
-        angles.cols() != accelerations.cols()                 ||
-        angles.cols() != times.size()                         ||
-        angles.cols() == 0) {
+    if (angles.rows() != velocities.rows()                  || // Number of joints
+      angles.rows() != accelerations.rows()                 ||
+      angles.rows() != static_cast<long int>(arm_->size())  ||
+      angles.cols() != velocities.cols()                    || // Number of waypoints
+      angles.cols() != accelerations.cols()                 ||
+      angles.cols() != times.size()                         ||
+      angles.cols() == 0) {
       RCLCPP_ERROR(this->get_logger(), "Angles, velocities, accelerations, or times were not the correct size");
       return;
     }
@@ -785,78 +781,38 @@ private:
   /////////////////// Initialize arm ///////////////////
   bool initializeArm() {
 
-    // Get parameters for name/family of modules; default to standard values:
-    std::vector<std::string> families;
-    if (this->has_parameter("families")) {
-      this->get_parameter("families", families);
-      RCLCPP_INFO(this->get_logger(), "Found and successfully read 'families' parameter");
-    } else {
-      RCLCPP_WARN(this->get_logger(), "Could not find/read 'families' parameter; defaulting to 'HEBI'");
-      families = {"HEBI"};
+    // Validate the configuration before proceeding
+    if (config_package_.empty() || config_file_.empty())
+    {
+      throw std::runtime_error("Both config_package and config_file must be provided.");
     }
 
-    std::vector<std::string> names;
-    // Read the package + path for the gains file
-    std::string gains_package;
-    std::string gains_file;
-    // Read the package + path for the hrdf file
-    std::string hrdf_package;
-    std::string hrdf_file;
-
-    bool success = true;
-    success = success && loadParam("names", names);
-    success = success && loadParam("gains_package", gains_package);
-    success = success && loadParam("gains_file", gains_file);
-    success = success && loadParam("hrdf_package", hrdf_package);
-    success = success && loadParam("hrdf_file", hrdf_file);
-
-    // Print all parameters
-    RCLCPP_INFO(this->get_logger(), "Successfully read the following parameters:");
-    RCLCPP_INFO(this->get_logger(), "  families: %s", families[0].c_str());
-    RCLCPP_INFO(this->get_logger(), "  names: %s", names[0].c_str());
-    RCLCPP_INFO(this->get_logger(), "  gains_package: %s", gains_package.c_str());
-    RCLCPP_INFO(this->get_logger(), "  gains_file: %s", gains_file.c_str());
-    RCLCPP_INFO(this->get_logger(), "  hrdf_package: %s", hrdf_package.c_str());
-    RCLCPP_INFO(this->get_logger(), "  hrdf_file: %s", hrdf_file.c_str());
-
-    if(!success) {
-      RCLCPP_ERROR(this->get_logger(), "ABORTING!");
-      return false;
+    // Resolve the config file path using the package share directory
+    const std::string package_share_directory = ament_index_cpp::get_package_share_directory(config_package_);
+    const std::string config_file_path = package_share_directory + "/config/" + config_file_;
+    std::vector<std::string> errors;
+  
+    // Load the config
+    const auto arm_config = RobotConfig::loadConfig(config_file_path, errors);
+    for (const auto& error : errors) {
+      RCLCPP_ERROR(this->get_logger(), error.c_str());
+    }
+    if (!arm_config) {
+      RCLCPP_ERROR(this->get_logger(), "Failed to load configuration from: %s", config_file_path.c_str());
+      return -1;
     }
 
-    // Create arm
-    arm::Arm::Params params;
-    params.families_ = families;
-    params.names_ = names;
+    // Create arm from config
+    arm_ = arm::Arm::create(*arm_config);
 
-    params.hrdf_file_ = ament_index_cpp::get_package_share_directory(hrdf_package) + std::string("/") + hrdf_file;
+    // Keep retrying if arm not found
+    while (!arm_) {
+      RCLCPP_ERROR(this->get_logger(), "Failed to create arm, retrying...");
 
-    for (int num_tries = 0; num_tries < 3; num_tries++) {
-      arm_ = arm::Arm::create(params);
-      if (arm_) {
-        break;
-      }
-      RCLCPP_WARN(this->get_logger(), "Could not initialize arm, trying again...");
-      rclcpp::sleep_for(std::chrono::seconds(1));
+      // Retry
+      arm_ = arm::Arm::create(*arm_config);
     }
-
-    if (!arm_) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Failed to find the following modules in family: " << families.at(0));
-      for(auto it = names.begin(); it != names.end(); ++it) {
-          RCLCPP_ERROR_STREAM(this->get_logger(), "> " << *it);
-      }
-      RCLCPP_ERROR(this->get_logger(), "Could not initialize arm! Check for modules on the network, and ensure good connection (e.g., check packet loss plot in Scope). Shutting down...");
-      return false;
-    } else  {
-      RCLCPP_INFO(this->get_logger(), "Arm initialized!");
-    }
-
-    // Load the appropriate gains file
-    if (!arm_->loadGains(ament_index_cpp::get_package_share_directory(gains_package) + std::string("/") + gains_file)) {
-      RCLCPP_WARN(this->get_logger(), "Could not load gains file and/or set arm gains. Attempting to continue.");
-    } else {
-      RCLCPP_INFO(this->get_logger(), "Gains file loaded");
-    }
+    RCLCPP_INFO(this->get_logger(), "Arm connected.");
 
     // Get the "home" position for the arm
     std::vector<double> home_position_vector;
@@ -925,8 +881,8 @@ private:
 
     // Make a list of family/actuator formatted names for the JointState publisher
     std::vector<std::string> full_names;
-    for (size_t idx=0; idx<names.size(); ++idx) {
-      full_names.push_back(prefix + names.at(idx));
+    for (size_t idx = 0; idx < arm_config->getNames().size(); ++idx) {
+      full_names.push_back(prefix + arm_config->getNames().at(idx));
     }
     // TODO: Figure out a way to get link names from the arm, so it doesn't need to be input separately
     state_msg_.name = full_names;
@@ -934,20 +890,6 @@ private:
 
     return true;
   }
-
-  template <typename T>
-  bool loadParam(std::string varname, T& var) {
-    if (this->has_parameter(varname)) {
-      if (this->get_parameter(varname, var)) {
-        RCLCPP_INFO_STREAM(this->get_logger(), "Found and successfully read '" << varname << "' parameter");
-        return true;
-      }
-    }
-
-    RCLCPP_ERROR_STREAM(this->get_logger(), "Could not find/read required '" << varname << "' parameter!");
-    return false;
-  }
- 
 };
 
 } // namespace ros

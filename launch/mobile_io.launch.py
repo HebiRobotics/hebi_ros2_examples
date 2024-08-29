@@ -50,18 +50,21 @@ def generate_launch_description():
         ),
     ]
 
+    config_package = LaunchConfiguration("config_package")
+    config_file = LaunchConfiguration("config_file")
+    prefix = LaunchConfiguration("prefix")
+
     # Define the node
     mobile_io_node = Node(
         package='hebi_ros2_examples',
         executable='mobile_io_node.py',
-        # name=PythonExpression(["'", LaunchConfiguration('prefix'), "' + 'mobile_io_node'"]),
         name='mobile_io_node',
         output='screen',
         parameters=[
-            {'config_package': LaunchConfiguration('config_package')},
-            {'config_file': LaunchConfiguration('config_file')}
+            {'config_package': config_package},
+            {'config_file': config_file}
         ],
-        namespace=LaunchConfiguration('prefix'),
+        namespace=prefix,
     )
 
     return LaunchDescription(

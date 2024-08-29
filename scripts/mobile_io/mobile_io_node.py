@@ -39,14 +39,14 @@ class MobileIONode(Node):
 
         # Load the configuration
         self.get_logger().debug(f'Loading configuration from {self.config_file_path}')
-        self.example_config = hebi.config.load_config(self.config_file_path)
+        self.mobile_io_config = hebi.config.load_config(self.config_file_path)
 
         # Initialize the HEBI Lookup interface
         self.lookup = hebi.Lookup()
         sleep(2)  # Allow time for the lookup to discover devices
 
         # Initialize Mobile IO from config
-        self.mobile_io = create_mobile_io_from_config(self.lookup, self.example_config, self.config_file_path, self)
+        self.mobile_io = create_mobile_io_from_config(self.mobile_io_config, self.lookup, self)
 
         # Create a timer to run at 200 Hz
         self.timer = self.create_timer(1.0/200.0, self.timer_callback)
