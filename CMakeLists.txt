@@ -47,20 +47,14 @@ ament_target_dependencies(arm_node
   control_msgs
 )
 
-if(moveit_ros_planning_interface_FOUND)
-  add_definitions(-DUSE_MOVEIT)
-  add_executable(move_arm src/kits/arm/move_arm.cpp)
-  ament_target_dependencies(move_arm
-    rclcpp
-    rclcpp_action
-    trajectory_msgs
-    hebi_msgs
-    geometry_msgs
-    moveit_msgs
-    moveit_ros_planning_interface
-    moveit_visual_tools
-  )
-endif()
+add_executable(move_arm src/kits/arm/move_arm.cpp)
+ament_target_dependencies(move_arm
+  rclcpp
+  rclcpp_action
+  trajectory_msgs
+  hebi_msgs
+  geometry_msgs
+)
 
 add_executable(xbox_arm src/kits/arm/xbox_arm.cpp)
 ament_target_dependencies(xbox_arm
@@ -152,11 +146,9 @@ install(TARGETS
   xbox_arm
   DESTINATION lib/${PROJECT_NAME})
 
-if(moveit_ros_planning_interface_FOUND)
-  install(TARGETS
-    move_arm
-    DESTINATION lib/${PROJECT_NAME})
-endif()
+install(TARGETS
+  move_arm
+  DESTINATION lib/${PROJECT_NAME})
 
 # Python modules
 ament_python_install_package(${PROJECT_NAME})
