@@ -141,7 +141,7 @@ install(TARGETS
   omni_base_node
   mecanum_base_node
   diff_drive_node
-  hexapod_control
+  # hexapod_control
   treaded_base_node
   xbox_arm
   DESTINATION lib/${PROJECT_NAME})
@@ -155,12 +155,12 @@ ament_python_install_package(${PROJECT_NAME})
 
 # Install python executables
 install(PROGRAMS
-  scripts/publish_trajectory.py
-  scripts/joint_state_combiner.py
+  scripts/ex_publish_trajectory.py
+  scripts/ex_teach_repeat_mobileio.py
   scripts/mobile_io/record_and_play_io.py
-  scripts/mobile_io/teach_repeat_io.py
   scripts/mobile_io/rosie_io.py
   scripts/mobile_io/hexapod_io.py
+  scripts/utils/joint_state_combiner.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

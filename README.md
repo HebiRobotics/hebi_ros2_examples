@@ -1,7 +1,13 @@
-# HEBI ROS2 Packages
+# HEBI ROS 2 Examples
 
-## Setting up your HEBI ROS workspace
+We provide three ways to control HEBI Arms using ROS 2:
+- Standalone HEBI API
+- ROS 2 Control
+- MoveIt
 
+## Standalone HEBI ROS 2 API
+
+Set up your workspace using the following commands:
 ```
 mkdir -p ~/hebi_ws/src
 cd ~/hebi_ws/src
@@ -11,29 +17,25 @@ git clone https://github.com/HebiRobotics/hebi_msgs.git
 git clone https://github.com/HebiRobotics/hebi_ros2_examples.git
 ```
 
-Optional: If you want HEBI packages for `ros2_control`, execute these too.
-
+Once you have cloned the necessary repositories, install the required dependencies using rosdep
 ```
-git clone https://github.com/HebiRobotics/hebi_hardware.git
-git clone https://github.com/HebiRobotics/hebi_bringup.git
-```
-
-Optional: If you want HEBI package for MoveIt, clone the repos for `ros2_control` and run the following:
-```
-git clone -b ros2 https://github.com/HebiRobotics/hebi_moveit_configs.git
+rosdep init
+rosdep update
+rosdep install --from-paths src --ignore-src -r -y
 ```
 
-Once you have cloned the necessary repositories, execute the following commands.
+Then, build the workspace and source it using the following commands.
 ```
 cd ~/hebi_ws
 colcon build
+source install/setup.bash
 ```
 
----
+### Create HRDF
 
-## Create HRDF
+To control your HEBI arm using the standalone API, you do not require a URDF file for robot description. Instead, we use a HRDF to describe the HEBI Arm.
 
-The HRDF for A-2085-05:
+For example, the HRDF for A-2085-05 arm is shown below.
 ```
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- For documentation on the HEBI Robot Configuration please visit: -->
@@ -58,7 +60,9 @@ The HRDF for A-2085-05:
 </robot>
 ```
 
-This step is sufficient if you want to control the arm directly with our `arm_node`. To do so, you need to create a `<your_robot_name>_params.yaml` file in `config` folder of the `hebi_ros2_examples` package.
+### Arm Node
+
+To control the arm with our `arm_node`, you need to create a parameter file `<your_robot_name>_params.yaml` file in `config` folder of the `hebi_ros2_examples` package.
 
 The configuration file takes the following form:
 ```
@@ -84,7 +88,7 @@ The parameters are defined as follows -
 
 **NOTE:**
 - `names` and `families` of your modules can be found and changed using Scope.
-- If the length of `home_position` array is greater than the number of joints, the remaining values will be ignored. **TO BE IMPLEMENTED**
+<!-- - If the length of `home_position` array is greater than the number of joints, the remaining values will be ignored. **TO BE IMPLEMENTED** -->
 
 The configuration file for HEBI Arm A-2085-05 is given below.
 ```
@@ -99,18 +103,46 @@ arm_node:
     home_position: [ 0.01, 2.09, 2.09, 1.5707963, 0.0 ]
 ```
 
-To run the arm node, execute the following command:
+Once you have both these files, you can run the arm node using the following command:
 ```
 ros2 launch hebi_ros2_examples arm_node.launch.py hebi_arm:=<your_robot_name>
 ```
 
 **NOTE:** Do not forget to build your workspace and source your setup before running the above command.
 
-Read more about `arm_node` in .......................................
+The arm node uses HEBI Arm API. It provides a variety of topics, services, and action for the user to control the arm.
 
-## Convert HRDF to URDF
+**Subscribers**
+- */SE3_jog [control_msgs/msg/JointJog]*: To command end effector jog in SE3 space (cartesian and rotation)
+- */cartesian_jog [control_msgs/msg/JointJog]*: To command end effector jog in cartesian space (x, y, z)
+- */cartesian_trajectory [trajectory_msgs/msg/JointTrajectory]*: To command a trajectory for the end effector in cartesian space
+- */joint_jog [control_msgs/msg/JointJog]*: To command jog in joint angles
+- */joint_trajectory [trajectory_msgs/msg/JointTrajectory]*: To command a trajectory in joint angles
 
-Using the python script given in `hebi_description` package, convert the HRDF to UDRF xacro. The URDF for A-2085-06 looks like this
+**Publishers**
+- */ee_pose [geometry_msgs/msg/PoseStamped]*: The end effector pose in SE3 space
+- */fdbk_joint_states [sensor_msgs/msg/JointState]*: Joint angles of the arm
+- */inertia [geometry_msgs/msg/Inertia]*: Inertia of the arm
+
+**Action Servers**
+- */arm_motion [hebi_msgs/action/ArmMotion]*: 
+
+Apart from the parameters set using the file discussed above, the arm node also uses few extra parameters which you can set dynamically:
+- *compliant_mode*: Setting it to true disables any goal set to the arm and sets the joint efforts to zero for easy manual movement of the arm.
+- *ik_seed*: This parameter sets the IK seed for inverse kinematic calculations.
+
+To get you started, we have provided two example scripts that use the `arm_node`.
+
+1. `ex_publish_trajectory`: This published a predefined trajectory to the `/joint_trajectory` topic.
+2. `ex_teach_repeat_mobileio`: This uses mobile IO to record and play trajetories, or go to saved waypoints.
+
+## HRDF to URDF
+
+**NOTE: Still in development. the URDFs for the standard arm kits are  already provided. Contact support@hebirobotics.com if you need help with generating URDF**
+
+If you require ROS 2 control or MoveIt functionalities, you will need to have a URDF of the HEBI Arm. To help you with that, we have a script that converts HRDF to URDF, provided in `hebi_description` package.
+
+The URDF for A-2085-05 looks like this
 ```
 <?xml version='1.0' encoding='UTF-8'?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="A-2085-05">
@@ -140,13 +172,9 @@ Using the python script given in `hebi_description` package, convert the HRDF to
 </robot>
 ```
 
-**NOTE-TO-SELF:**
-- Script to be checked
-- mass of gripper was zero before, it should have some mass
+To be compatible with the `hebi_description` package standards, the URDF will be saved as `<robot_name>.urdf.xacro` in the `urdf/kits` folder.
 
-To be compatible with the `hebi_description` package standards, the URDF will be saved as `<robot_name>.urdf.xacro` in the `./urdf/kits` folder.
-
-To check if your arm configuration in RViz, run the following command:
+You can visualize the arm URDF using RViz. To do so, run the following command.
 ```
 ros2 launch hebi_description view_arm.launch.py hebi_arm:=<your_robot_name>
 ```
@@ -161,9 +189,20 @@ If the launch is successful, you should see a RViz window, with the arm and a GU
 
 ## ROS2 Control
 
-If you want to control your arm using `ros2_control`, you will need two files:
-- ROS2 Control macro file apart from the URDF file created from the above step.
-- Xacro file including the ROS 2 Control macro file and the original URDF file.
+To control HEBI arm using `ros2_control`, you need additional packages.
+```
+git clone https://github.com/HebiRobotics/hebi_hardware.git
+git clone -b $ROS_DISTRO https://github.com/HebiRobotics/hebi_bringup.git # ROS_DISTRO can be either humble, iron, or jazzy
+```
+
+Install dependencies:
+```
+sudo apt install ros-$ROS_DISTRO-ros2-control ros-$ROS_DISTRO-ros2-controllers
+```
+
+You will also need three more files apart from the URDF file describing the arm:
+- ROS2 Control macro file
+- Xacro file comprising the ROS 2 Control macro file and the original URDF file
 - ROS2 Control parameter file
 
 Both of these files should be placed in `urdf/kits/ros2_control` folder of the `hebi_decription` package.
@@ -228,21 +267,17 @@ The template for a HEBI Arm ROS2 Control Macro file is as follows:
     </ros2_control>
 
     <!-- Gazebo Classic plugins -->
-    <xacro:if value="$(arg sim_gazebo)">
-      <gazebo>
-        <plugin filename="libgazebo_ros2_control.so" name="gazebo_ros2_control">
-          <parameters>"<your_controller_param_file>"</parameters>
-        </plugin>
-      </gazebo>
-    </xacro:if>
+    ...
+
+    <!-- Gazebo plugins -->
+    ...
 
   </xacro:macro>
 </robot>
 ```
+Name this file `<your_robot_name>_macro.ros2_control.xacro`.
 
-It is recommended to name this file as `<your_robot_name>_macro.ros2_control.xacro`.
-
-The `A-2085-05_macro.ros2_control.xacro` file looks like this: <link_to_github_file>.
+**NOTE**: The gazebo classic and ignition plugins sections differ with each ROS version. Please refer to example files provided.
 
 ### Combined URDF Xacro File
 
@@ -290,7 +325,7 @@ The template for the combined URDF xacro file is given below:
 </robot>
 ```
 
-This file is named similarly to the original URDF file, i.e., `<robot_name>.urdf.xacro`, but saved in the `/urdf/kits/ros2_control` folder.
+This file is named similarly to the original URDF file, i.e., `<robot_name>.urdf.xacro`, but saved in the `urdf/kits/ros2_control` folder.
 
 ### ROS2 Control Parameter File
 
@@ -349,31 +384,46 @@ hebi_arm_controller:
 To execute the ROS 2 Control node with the hardware, run the following command:
 ```
 ros2 launch hebi_bringup bringup_arm.launch.py hebi_arm:=<your_robot_name> families:="<string_families_separated_by_semicolon>" names:="<string_names_separated_by_semicolon>"
+use_mock_hardware:=true/false # Default is true
 ```
 Here is an example for A-2085-05:
 ```
 ros2 launch hebi_bringup bringup_arm.launch.py hebi_arm:=A-2085-05 families:="HEBI" names:="J1_base;J2_shoulder;J3_elbow;J4_wrist1;J5_wrist2"
 ```
-There are many arguments that can be passed to the `bringup_arm.launch.py` file.
+There are many arguments that can be passed to the `bringup_arm.launch.py` file. Please refer the launch file to see all the parameters.
 
-To execute the ROS 2 Control node with Gazebo simulation, run the following command:
+### Gazebo Classic
+
+To execute the ROS 2 Control node with Gazebo classic simulation, run the following command:
 ```
-ros2 launch hebi_bringup bringup_arm_gazebo.launch.py hebi_arm:=<your_robot_name>
+ros2 launch hebi_bringup bringup_arm_gazebo_classic.launch.py hebi_arm:=<your_robot_name>
 ```
-**NOTE:** Do not forget to build your workspace and source your setup before running the above commands.
+**NOTE:** Do not forget to build your workspace and source your setup before running the above commands. Also, ensure you have necessary packages installed such as `gazebo_ros`, `gazebo_ros2_control`
 
 To test the controllers, you can do so by running the following command:
 ```
 ros2 launch hebi_bringup test_joint_trajectory_controller.launch.py
 ```
-
 You should see the arm moving according to the joint positions given in the configuration file.
 
-**NOTE: More details**
+### Gazebo (Ignition)
+
+To execute the ROS 2 Control node with Gazebo (ignition) simulation, run the following command:
+```
+ros2 launch hebi_bringup bringup_arm_gazebo.launch.py hebi_arm:=<your_robot_name>
+```
+**NOTE:** Do not forget to build your workspace and source your setup before running the above commands. Also, ensure you have necessary packages installed such as `ros_gz`, `ign_ros2_control`.
+
+You can use the same launch file `test_joint_trajectory_controller.launch.py` to test the controller.
 
 ## MoveIt
 
-If you want to use MoveIt with your HEBI arm, you will need to create a MoveIt configuration package for your arm. The steps to do so are given below.
+To use MoveIt with HEBI Arm, you need the ROS 2 control repositories and also the following:
+```
+git clone -b ros2 https://github.com/HebiRobotics/hebi_moveit_configs.git
+```
+
+Additionall, you will need to create a MoveIt configuration package for your arm. The steps to do so are given below.
 
 ### Create MoveIt Configuration Package
 

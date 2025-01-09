@@ -5,7 +5,7 @@ from builtin_interfaces.msg import Duration
 from rclpy.node import Node
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from numpy import pi, floor, sin, cos, nan
-import time
+
 
 class TrajectoryPublisher(Node):
   def __init__(self):
@@ -25,7 +25,7 @@ class TrajectoryPublisher(Node):
     point.time_from_start = Duration(sec=int(floor(self.t)), nanosec=int((self.t-floor(self.t))*1e9))
     trajectory_msg.points.append(point)
 
-    while (self.t <= 48.0):
+    while (self.t <= 12.0):
       self.t += self.dt
       point = JointTrajectoryPoint()
       point.positions = [pi/2 * sin(pi*(self.t-1.0)/4), 2.09439, 2.09439, 0.0, pi/2, 0.0]
