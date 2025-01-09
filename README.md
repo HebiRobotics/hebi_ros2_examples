@@ -131,10 +131,11 @@ Apart from the parameters set using the file discussed above, the arm node also 
 - *compliant_mode*: Setting it to true disables any goal set to the arm and sets the joint efforts to zero for easy manual movement of the arm.
 - *ik_seed*: This parameter sets the IK seed for inverse kinematic calculations.
 
-To get you started, we have provided two example scripts that use the `arm_node`.
+To get you started, we have provided three example scripts that use the `arm_node`.
 
 1. `ex_publish_trajectory`: This published a predefined trajectory to the `/joint_trajectory` topic.
 2. `ex_teach_repeat_mobileio`: This uses mobile IO to record and play trajetories, or go to saved waypoints.
+3. `ex_teleop_mobileio`: This uses mobile IO to send jog commands to control the arm.
 
 ## HRDF to URDF
 

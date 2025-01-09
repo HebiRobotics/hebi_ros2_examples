@@ -562,7 +562,7 @@ private:
 
   // "Jog" the target end effector location in SE(3), replanning
   // smoothly to the new location
-  // First three entires are angular, and last three are linear
+  // First three entires are linear, and last three are angular
   void SE3JogCallback(const control_msgs::msg::JointJog::SharedPtr jog_msg) {
 
     if (!homed_flag_ || acting_flag_)
@@ -595,15 +595,15 @@ private:
     // In our convention, yaw is global (extrinsic) and roll is local (intrinsic), with respect to the end-effector frame
     times(0) = jog_msg->duration;
     new_orientation = cur_orientation
-                      * Eigen::AngleAxisd(jog_msg->displacements[2], Eigen::Vector3d::UnitY()).matrix() 
-                      * Eigen::AngleAxisd(jog_msg->displacements[1], Eigen::Vector3d::UnitX()).matrix()
-                      * Eigen::AngleAxisd(jog_msg->displacements[0], Eigen::Vector3d::UnitZ()).matrix();
+                      * Eigen::AngleAxisd(jog_msg->displacements[5], Eigen::Vector3d::UnitY()).matrix() 
+                      * Eigen::AngleAxisd(jog_msg->displacements[4], Eigen::Vector3d::UnitX()).matrix()
+                      * Eigen::AngleAxisd(jog_msg->displacements[3], Eigen::Vector3d::UnitZ()).matrix();
 
     euler_angles = new_orientation.eulerAngles(0, 1, 2);
 
-    xyz_positions(0, 0) = cur_pos[0] + jog_msg->displacements[3]; // x
-    xyz_positions(1, 0) = cur_pos[1] + jog_msg->displacements[4]; // y
-    xyz_positions(2, 0) = cur_pos[2] + jog_msg->displacements[5]; // z
+    xyz_positions(0, 0) = cur_pos[0] + jog_msg->displacements[0]; // x
+    xyz_positions(1, 0) = cur_pos[1] + jog_msg->displacements[1]; // y
+    xyz_positions(2, 0) = cur_pos[2] + jog_msg->displacements[2]; // z
 
     // Replan
     updateSE3Waypoints(use_traj_times_, times, xyz_positions, &euler_angles, false);

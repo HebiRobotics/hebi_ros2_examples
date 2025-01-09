@@ -157,6 +157,7 @@ ament_python_install_package(${PROJECT_NAME})
 install(PROGRAMS
   scripts/ex_publish_trajectory.py
   scripts/ex_teach_repeat_mobileio.py
+  scripts/ex_teleop_mobileio.py
   scripts/mobile_io/record_and_play_io.py
   scripts/mobile_io/rosie_io.py
   scripts/mobile_io/hexapod_io.py

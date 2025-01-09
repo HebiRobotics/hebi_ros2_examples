@@ -15,8 +15,6 @@ import copy
 
 from time import sleep
 import hebi
-import json
-import requests
 
 from builtin_interfaces.msg import Duration
 
