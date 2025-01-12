@@ -12,6 +12,7 @@ endif()
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_python REQUIRED)
+find_package(ament_index_cpp REQUIRED)
 find_package(Eigen3)
 find_package(rclcpp REQUIRED)
 find_package(rclpy REQUIRED)
@@ -38,6 +39,7 @@ add_executable(arm_node src/kits/arm/arm_node.cpp)
 ament_target_dependencies(arm_node
   rclcpp
   rclcpp_action
+  ament_index_cpp
   geometry_msgs
   trajectory_msgs
   sensor_msgs
@@ -72,6 +74,7 @@ add_executable(omni_base_node src/kits/base/omni_base_node.cpp src/kits/base/uti
 ament_target_dependencies(omni_base_node
   rclcpp
   rclcpp_action
+  ament_index_cpp
   geometry_msgs
   nav_msgs
   trajectory_msgs
@@ -86,6 +89,7 @@ add_executable(mecanum_base_node src/kits/base/mecanum_base_node.cpp src/kits/ba
 ament_target_dependencies(mecanum_base_node
   rclcpp
   rclcpp_action
+  ament_index_cpp
   geometry_msgs
   nav_msgs
   trajectory_msgs
@@ -100,6 +104,7 @@ add_executable(diff_drive_node src/kits/base/diff_drive_node.cpp src/kits/base/u
 ament_target_dependencies(diff_drive_node
   rclcpp
   rclcpp_action
+  ament_index_cpp
   geometry_msgs
   nav_msgs
   trajectory_msgs
@@ -120,6 +125,7 @@ add_executable(hexapod_control src/kits/daisy/hexapod_control.cpp
 )
 ament_target_dependencies(hexapod_control
   rclcpp
+  ament_index_cpp
   geometry_msgs
   hebi_cpp_api
   sensor_msgs
@@ -128,6 +134,7 @@ ament_target_dependencies(hexapod_control
 add_executable(treaded_base_node src/kits/tready/treaded_base_node.cpp src/kits/tready/treaded_base.cpp)
 ament_target_dependencies(treaded_base_node
   rclcpp
+  ament_index_cpp
   geometry_msgs
   std_msgs
   hebi_cpp_api

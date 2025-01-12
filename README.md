@@ -19,9 +19,14 @@ git clone https://github.com/HebiRobotics/hebi_ros2_examples.git
 
 Once you have cloned the necessary repositories, install the required dependencies using rosdep
 ```
-rosdep init
 rosdep update
 rosdep install --from-paths src --ignore-src -r -y
+```
+
+NOTE: If your ROS distribution is End-of-Life (EOL), you might need to include EOL distributions in your rosdep commands:
+```
+rosdep update --include-eol-distros
+rosdep install --from-paths src --ignore-src -r -y --include-eol-distros
 ```
 
 Then, build the workspace and source it using the following commands.
@@ -413,7 +418,7 @@ To execute the ROS 2 Control node with Gazebo (ignition) simulation, run the fol
 ```
 ros2 launch hebi_bringup bringup_arm_gazebo.launch.py hebi_arm:=<your_robot_name>
 ```
-**NOTE:** Do not forget to build your workspace and source your setup before running the above commands. Also, ensure you have necessary packages installed such as `ros_gz`, `ign_ros2_control`.
+**NOTE:** Do not forget to build your workspace and source your setup before running the above commands. Also, ensure you have necessary packages installed such as `ros_gz`, `ign_ros2_control` / `gz_ros2_control`.
 
 You can use the same launch file `test_joint_trajectory_controller.launch.py` to test the controller.
 
