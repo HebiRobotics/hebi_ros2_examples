@@ -4,10 +4,10 @@ import sys
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, SetLaunchConfiguration, LogInfo, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression, EqualsSubstitution
+from launch.substitutions import Command, FindExecutable, LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, LaunchConfigurationEquals
 
 
 def generate_launch_description():
@@ -55,18 +55,14 @@ def generate_launch_description():
   default_arguments.append(
     LogInfo(
       msg=PythonExpression(['"Using default params_file: ', LaunchConfiguration("hebi_arm"), '_params.yaml"']),
-      condition=IfCondition(
-        EqualsSubstitution(LaunchConfiguration("params_file"), "None")
-      )
+      condition=LaunchConfigurationEquals("params_file", "None")
     )
   )
   default_arguments.append(
     SetLaunchConfiguration(
       name="params_file",
       value=PythonExpression(['"', LaunchConfiguration("hebi_arm"), '_params.yaml"']),
-      condition=IfCondition(
-        EqualsSubstitution(LaunchConfiguration("params_file"), "None")
-      )                           
+      condition=LaunchConfigurationEquals("params_file", "None")
     )
   )
   
