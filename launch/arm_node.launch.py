@@ -91,7 +91,6 @@ def generate_launch_description():
       output="both",
       parameters=[robot_description],
       namespace=prefix,
-      remappings=[('/joint_states', '/fdbk_joint_states')]
   )
 
   robot_params = PathJoinSubstitution(

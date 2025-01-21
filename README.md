@@ -126,7 +126,7 @@ The arm node uses HEBI Arm API. It provides a variety of topics, services, and a
 
 **Publishers**
 - */ee_pose [geometry_msgs/msg/PoseStamped]*: The end effector pose in SE3 space
-- */fdbk_joint_states [sensor_msgs/msg/JointState]*: Joint angles of the arm
+- */joint_states [sensor_msgs/msg/JointState]*: Joint angles of the arm
 - */inertia [geometry_msgs/msg/Inertia]*: Inertia of the arm
 
 **Action Servers**

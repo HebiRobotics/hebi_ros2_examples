@@ -8,6 +8,7 @@
 #include <geometry_msgs/msg/inertia.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_srvs/srv/empty.hpp>
 #include <hebi_msgs/action/arm_motion.hpp>
 
 #include "hebi_cpp_api/group_command.hpp"
@@ -81,11 +82,14 @@ public:
     cartesian_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("cartesian_trajectory", 50, std::bind(&ArmNode::cartesianWaypointsCallback, this, std::placeholders::_1));
 
     // Publishers
-    arm_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("fdbk_joint_states", 50);
+    arm_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("joint_states", 50);
     center_of_mass_publisher_ = this->create_publisher<geometry_msgs::msg::Inertia>("inertia", 50);
     end_effector_pose_publisher_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("ee_pose", 50);
+
+    // Services
+    home_service_ = this->create_service<std_srvs::srv::Empty>("home", std::bind(&ArmNode::homeCallback, this, std::placeholders::_1, std::placeholders::_2));
     
-    // start the action server
+    // Start the action server
     action_server_ = rclcpp_action::create_server<ArmMotion>(
       this,
       "arm_motion",
@@ -104,7 +108,7 @@ public:
     // Go to home position
     try {
       arm_->update();
-      arm_->setGoal(arm::Goal::createFromPosition(home_position_));
+      arm_->setGoal(arm::Goal::createFromPosition(3.0, home_position_));
     }
     catch (const std::runtime_error& e) {
       RCLCPP_ERROR(this->get_logger(), "Could not go to home position: %s", e.what());
@@ -115,7 +119,7 @@ public:
     while (!arm_->atGoal() && rclcpp::ok()) {
       update();
     }  
-    homed_flag_ = true;
+    arm_initialized_ = true;
     RCLCPP_INFO(this->get_logger(), "Reached home position");
   }
 
@@ -132,8 +136,8 @@ private:
 
   std::unique_ptr<arm::Arm> arm_;
 
-  bool homed_flag_ = false; // Indicates that the end-effector has been homed initially
-  bool acting_flag_ = false; // Indicates that an action is being executed
+  bool arm_initialized_ = false; // Indicates that the end-effector has been homed initially
+  bool has_active_trajectory_ = false; // Indicates that an action is being executed
 
   bool compliant_mode_{false};
   Eigen::VectorXd home_position_;
@@ -158,6 +162,8 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr end_effector_pose_publisher_;
 
   rclcpp_action::Server<hebi_msgs::action::ArmMotion>::SharedPtr action_server_;
+
+  rclcpp::Service<std_srvs::srv::Empty>::SharedPtr home_service_;
 
   rclcpp::TimerBase::SharedPtr timer_;
 
@@ -268,7 +274,7 @@ private:
     RCLCPP_INFO(this->get_logger(), "Executing arm motion action");
     
     // Acting flag should remain true while any action is being executed
-    acting_flag_ = true;
+    has_active_trajectory_ = true;
 
     // Wait until the action is complete, sending status/feedback along the way.
     rclcpp::Rate r(10);
@@ -324,7 +330,7 @@ private:
           goal_handle->abort(result);
 
           // Reset acting flag
-          acting_flag_ = false;
+          has_active_trajectory_ = false;
           return;
         }
 
@@ -353,7 +359,7 @@ private:
         RCLCPP_INFO(this->get_logger(), "Arm motion was cancelled");
         
         // Reset acting flag
-        acting_flag_ = false;
+        has_active_trajectory_ = false;
         return;
       }
 
@@ -365,7 +371,7 @@ private:
         RCLCPP_INFO(this->get_logger(), "Arm motion was aborted due to compliant mode activation");
         
         // Reset acting flag
-        acting_flag_ = false;
+        has_active_trajectory_ = false;
         return;
       }
 
@@ -384,9 +390,49 @@ private:
       RCLCPP_INFO(this->get_logger(), "Completed arm motion action");
       setColor({0, 0, 0, 0});
       // Reset acting flag
-      acting_flag_ = false;
+      has_active_trajectory_ = false;
     }
 
+  }
+
+  //////////////////////// HOME SERVICE CALLBACK FUNCTION ////////////////////////
+  void homeCallback(const std::shared_ptr<std_srvs::srv::Empty::Request> request, std::shared_ptr<std_srvs::srv::Empty::Response> response) {
+    (void)request;
+    (void)response;
+
+    if (!arm_initialized_) {
+      RCLCPP_ERROR(this->get_logger(), "Arm not initialized yet!");
+      return;
+    }
+
+    if (compliant_mode_) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Deactivate compliant mode to use home service");
+      return;
+    }
+
+    if (has_active_trajectory_) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Arm is currently executing an action; cannot home");
+      return;
+    }
+
+    // Go to home position
+    try {
+      has_active_trajectory_ = true;
+      arm_->update();
+      arm_->setGoal(arm::Goal::createFromPosition(3.0, home_position_));
+    }
+    catch (const std::runtime_error& e) {
+      RCLCPP_ERROR(this->get_logger(), "Could not go to home position: %s", e.what());
+      has_active_trajectory_ = false;
+      return;
+    }
+
+    // Raise homed flag only after it reaches the home position
+    while (!arm_->atGoal() && rclcpp::ok()) {
+      update();
+    }
+    has_active_trajectory_ = false;
+    RCLCPP_INFO(this->get_logger(), "Reached home position");
   }
 
   //////////////////////// SUBSCRIBER CALLBACK FUNCTIONS ////////////////////////
@@ -473,7 +519,7 @@ private:
   // "Jog" the arm along each joint
   void jointJogCallback(const control_msgs::msg::JointJog::SharedPtr jog_msg) {
 
-    if (!homed_flag_)
+    if (!arm_initialized_)
       return;
 
     if (compliant_mode_) {
@@ -522,7 +568,7 @@ private:
   // smoothly to the new location
   void cartesianJogCallback(const control_msgs::msg::JointJog::SharedPtr jog_msg) {
 
-    if (!homed_flag_)
+    if (!arm_initialized_)
       return;
 
     if (compliant_mode_) {
@@ -565,7 +611,7 @@ private:
   // First three entires are linear, and last three are angular
   void SE3JogCallback(const control_msgs::msg::JointJog::SharedPtr jog_msg) {
 
-    if (!homed_flag_ || acting_flag_)
+    if (!arm_initialized_ || has_active_trajectory_)
       return;
 
     if (compliant_mode_) {

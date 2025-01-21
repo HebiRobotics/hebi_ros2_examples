@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 
+import time
 import rclpy
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rcl_interfaces.srv import SetParametersAtomically
 
 from control_msgs.msg import JointJog
-from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from rclpy.action import ActionClient
 from hebi_msgs.action import ArmMotion
-from builtin_interfaces.msg import Duration
+from std_srvs.srv import Empty
 
 from time import sleep
 import hebi
@@ -23,14 +23,7 @@ class TeleopNode(Node):
     self.declare_parameter("name", "mobileIO")
     self.declare_parameter("prefix", "/")
 
-    self.home_position = JointTrajectoryPoint()
-    self.home_position.positions = [0.0, 2.09, 2.09, 0.0, 1.57, 0.0]
-    self.home_position.velocities = [0.0] * 6
-    self.home_position.accelerations = [0.0] * 6
-    self.home_position.time_from_start = Duration(sec=3)
-
-    self.home_trajectory = JointTrajectory()
-    self.home_trajectory.points.append(self.home_position)
+    self.home_client = self.create_client(Empty, '/home')
 
     self.mio = None
     if (not self.initialize()):
@@ -43,6 +36,8 @@ class TeleopNode(Node):
     self.jog_publisher = self.create_publisher(JointJog, '/SE3_jog', 10)
     # Create action client for /arm_motion
     self.arm_motion_client = ActionClient(self, ArmMotion, self.get_parameter("prefix").get_parameter_value().string_value + 'arm_motion')
+
+    self.last_btn_pressed_time = time.time()
 
   def initialize(self):
     self.get_logger().info("Initializing Mobile IO...")
@@ -84,6 +79,7 @@ class TeleopNode(Node):
     self.mio.set_axis_label(8, 'x, y')
     self.mio.set_axis_label(3, 'wrist', blocking=False)
     self.mio.set_snap(3, 0)
+    self.mio.set_snap(6, 0)
 
     self.mio.set_led_color('blue')
 
@@ -93,10 +89,16 @@ class TeleopNode(Node):
     self.mio.update()
 
     if self.mio.get_button_diff(2):
+      if (time.time() - self.last_btn_pressed_time) < 0.5:
+        return
+      self.last_btn_pressed_time = time.time()
       param = Parameter('compliant_mode', Parameter.Type.BOOL, self.mio.get_button_state(2)).to_parameter_msg()
       print('Setting compliant mode to', self.mio.get_button_state(2))
       self.set_external_parameters('arm_node', [param])
     elif self.mio.get_button_state(1):
+      if (time.time() - self.last_btn_pressed_time) < 0.5:
+        return
+      self.last_btn_pressed_time = time.time()
       self.home()
     else:
       arm_dx = 0.1 * self.mio.get_axis_state(8)
@@ -133,13 +135,25 @@ class TeleopNode(Node):
         self.get_logger().error('Service call failed %r' % (e,))
   
   def home(self):
-    goal_msg = ArmMotion.Goal()
-    goal_msg.waypoints = self.home_trajectory
-    goal_msg.use_wp_times = True
-    goal_msg.wp_type = ArmMotion.Goal.JOINT_SPACE
-    self.arm_motion_client.wait_for_server()
-    self.send_trajectory_future = self.arm_motion_client.send_goal_async(goal_msg)
-    self.send_trajectory_future.add_done_callback(self.send_trajectory_response_callback)
+    self.get_logger().info('Homing...')
+    tryout_times = 3
+    while not self.home_client.wait_for_service(timeout_sec=1.0) and tryout_times > 0:
+      self.get_logger().info('Service not available, waiting again...')
+      tryout_times -= 1
+
+    if tryout_times == 0:
+      self.get_logger().error('Service not available.')
+      return
+    
+    request = Empty.Request()
+    future = self.home_client.call_async(request)
+    future.add_done_callback(self.home_done_callback)
+
+  def home_done_callback(self, future):
+    if future.result() is not None:
+      self.get_logger().info('Home service success')
+    else:
+      self.get_logger().error('Home service failed')
   
   def send_trajectory_response_callback(self, future):
     goal_handle = future.result()
