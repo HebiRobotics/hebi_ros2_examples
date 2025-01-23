@@ -5,9 +5,9 @@ if(NOT CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD 14)
 endif()
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  add_compile_options(-Wall -Wextra -Wpedantic)
-endif()
+# if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  # add_compile_options(-Wall -Wextra)
+# endif()
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
@@ -165,16 +165,26 @@ install(PROGRAMS
   scripts/ex_publish_trajectory.py
   scripts/ex_teach_repeat_mobileio.py
   scripts/ex_teleop_mobileio.py
+  scripts/mobile_io/mobile_io_node.py
   scripts/mobile_io/record_and_play_io.py
+  scripts/mobile_io/teach_repeat_io.py
   scripts/mobile_io/rosie_io.py
   scripts/mobile_io/hexapod_io.py
   scripts/utils/joint_state_combiner.py
+  scripts/ex_impedance_control_cartesian_node.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+# Install Python utilities
+install(PROGRAMS
+  hebi_ros2_examples/hebi_util.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
 install(DIRECTORY
   launch
   config
+  rviz
   DESTINATION share/${PROJECT_NAME})
 
 install(DIRECTORY
