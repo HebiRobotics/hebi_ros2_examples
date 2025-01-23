@@ -6,4 +6,4 @@
     gains_file: "config/gains/A-2240-06_gains.xml"
     hrdf_package: "hebi_description"
     hrdf_file: "config/hrdf/A-2240-06.hrdf"
-    home_position: [ 0.6, 0.15, -2.85, 0.01, -1.5708, 0.01 ]
+    home_position: [ 0.0, 2.09439, 2.09439, 0.0, 1.57079, 0.0]

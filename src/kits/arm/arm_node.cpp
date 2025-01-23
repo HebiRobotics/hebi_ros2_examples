@@ -8,6 +8,7 @@
 #include <geometry_msgs/msg/inertia.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_srvs/srv/empty.hpp>
 #include <hebi_msgs/action/arm_motion.hpp>
 
 #include "hebi_cpp_api/group_command.hpp"
@@ -82,17 +83,20 @@ public:
   // Subscribers specific to plugins
 
 
-  // Publishers
-  arm_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("fdbk_joint_states", 50);
-  center_of_mass_publisher_ = this->create_publisher<geometry_msgs::msg::Inertia>("inertia", 50);
-  end_effector_pose_publisher_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("ee_pose", 50);
-  
-  // start the action server
-  action_server_ = rclcpp_action::create_server<ArmMotion>(
-    this,
-    "arm_motion",
-    std::bind(&ArmNode::handleArmMotionGoal, this, std::placeholders::_1, std::placeholders::_2),
-    std::bind(&ArmNode::handleArmMotionCancel, this, std::placeholders::_1),
+    // Publishers
+    arm_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("joint_states", 50);
+    center_of_mass_publisher_ = this->create_publisher<geometry_msgs::msg::Inertia>("inertia", 50);
+    end_effector_pose_publisher_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("ee_pose", 50);
+
+    // Services
+    home_service_ = this->create_service<std_srvs::srv::Empty>("home", std::bind(&ArmNode::homeCallback, this, std::placeholders::_1, std::placeholders::_2));
+    
+    // Start the action server
+    action_server_ = rclcpp_action::create_server<ArmMotion>(
+      this,
+      "arm_motion",
+      std::bind(&ArmNode::handleArmMotionGoal, this, std::placeholders::_1, std::placeholders::_2),
+      std::bind(&ArmNode::handleArmMotionCancel, this, std::placeholders::_1),
     std::bind(&ArmNode::handleArmMotionAccepted, this, std::placeholders::_1)
   );
 
@@ -102,7 +106,7 @@ public:
   if (go_to_home_) {
     try {
       arm_->update();
-      arm_->setGoal(arm::Goal::createFromPosition(home_position_));
+      arm_->setGoal(arm::Goal::createFromPosition(3.0, home_position_));
     }
     catch (const std::runtime_error& e) {
       RCLCPP_ERROR(this->get_logger(), "Could not go to home position: %s", e.what());
@@ -110,13 +114,13 @@ public:
     }
   }
 
-  // Raise homed flag only after it reaches the home position
-  while (!arm_->atGoal() && rclcpp::ok()) {
-    update();
-  }  
-  homed_flag_ = true;
-  RCLCPP_INFO(this->get_logger(), "Reached home position");
-}
+    // Raise homed flag only after it reaches the home position
+    while (!arm_->atGoal() && rclcpp::ok()) {
+      update();
+    }  
+    arm_initialized_ = true;
+    RCLCPP_INFO(this->get_logger(), "Reached home position");
+  }
 
 void update() {
   // Update feedback, and command the arm to move along its planned path
@@ -134,8 +138,8 @@ private:
 
   std::unique_ptr<arm::Arm> arm_;
 
-  bool homed_flag_ = false; // Indicates that the end-effector has been homed initially
-  bool acting_flag_ = false; // Indicates that an action is being executed
+  bool arm_initialized_ = false; // Indicates that the end-effector has been homed initially
+  bool has_active_trajectory_ = false; // Indicates that an action is being executed
 
   bool compliant_mode_{false};
   Eigen::VectorXd home_position_ = Eigen::VectorXd::Constant(6, 0.01); // Default values are close to zero to avoid singularity
@@ -161,6 +165,8 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr end_effector_pose_publisher_;
 
   rclcpp_action::Server<hebi_msgs::action::ArmMotion>::SharedPtr action_server_;
+
+  rclcpp::Service<std_srvs::srv::Empty>::SharedPtr home_service_;
 
   rclcpp::TimerBase::SharedPtr timer_;
 
@@ -271,7 +277,7 @@ private:
     RCLCPP_INFO(this->get_logger(), "Executing arm motion action");
     
     // Acting flag should remain true while any action is being executed
-    acting_flag_ = true;
+    has_active_trajectory_ = true;
 
     // Wait until the action is complete, sending status/feedback along the way.
     rclcpp::Rate r(10);
@@ -327,7 +333,7 @@ private:
           goal_handle->abort(result);
 
           // Reset acting flag
-          acting_flag_ = false;
+          has_active_trajectory_ = false;
           return;
         }
 
@@ -356,7 +362,7 @@ private:
         RCLCPP_INFO(this->get_logger(), "Arm motion was cancelled");
         
         // Reset acting flag
-        acting_flag_ = false;
+        has_active_trajectory_ = false;
         return;
       }
 
@@ -368,7 +374,7 @@ private:
         RCLCPP_INFO(this->get_logger(), "Arm motion was aborted due to compliant mode activation");
         
         // Reset acting flag
-        acting_flag_ = false;
+        has_active_trajectory_ = false;
         return;
       }
 
@@ -387,9 +393,49 @@ private:
       RCLCPP_INFO(this->get_logger(), "Completed arm motion action");
       setColor({0, 0, 0, 0});
       // Reset acting flag
-      acting_flag_ = false;
+      has_active_trajectory_ = false;
     }
 
+  }
+
+  //////////////////////// HOME SERVICE CALLBACK FUNCTION ////////////////////////
+  void homeCallback(const std::shared_ptr<std_srvs::srv::Empty::Request> request, std::shared_ptr<std_srvs::srv::Empty::Response> response) {
+    (void)request;
+    (void)response;
+
+    if (!arm_initialized_) {
+      RCLCPP_ERROR(this->get_logger(), "Arm not initialized yet!");
+      return;
+    }
+
+    if (compliant_mode_) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Deactivate compliant mode to use home service");
+      return;
+    }
+
+    if (has_active_trajectory_) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Arm is currently executing an action; cannot home");
+      return;
+    }
+
+    // Go to home position
+    try {
+      has_active_trajectory_ = true;
+      arm_->update();
+      arm_->setGoal(arm::Goal::createFromPosition(3.0, home_position_));
+    }
+    catch (const std::runtime_error& e) {
+      RCLCPP_ERROR(this->get_logger(), "Could not go to home position: %s", e.what());
+      has_active_trajectory_ = false;
+      return;
+    }
+
+    // Raise homed flag only after it reaches the home position
+    while (!arm_->atGoal() && rclcpp::ok()) {
+      update();
+    }
+    has_active_trajectory_ = false;
+    RCLCPP_INFO(this->get_logger(), "Reached home position");
   }
 
   //////////////////////// SUBSCRIBER CALLBACK FUNCTIONS ////////////////////////
@@ -476,7 +522,7 @@ private:
   // "Jog" the arm along each joint
   void jointJogCallback(const control_msgs::msg::JointJog::SharedPtr jog_msg) {
 
-    if (!homed_flag_)
+    if (!arm_initialized_)
       return;
 
     if (compliant_mode_) {
@@ -525,7 +571,7 @@ private:
   // smoothly to the new location
   void cartesianJogCallback(const control_msgs::msg::JointJog::SharedPtr jog_msg) {
 
-    if (!homed_flag_)
+    if (!arm_initialized_)
       return;
 
     if (compliant_mode_) {
@@ -565,10 +611,10 @@ private:
 
   // "Jog" the target end effector location in SE(3), replanning
   // smoothly to the new location
-  // First three entires are angular, and last three are linear
+  // First three entires are linear, and last three are angular
   void SE3JogCallback(const control_msgs::msg::JointJog::SharedPtr jog_msg) {
 
-    if (!homed_flag_ || acting_flag_)
+    if (!arm_initialized_ || has_active_trajectory_)
       return;
 
     if (compliant_mode_) {
@@ -598,15 +644,15 @@ private:
     // In our convention, yaw is global (extrinsic) and roll is local (intrinsic), with respect to the end-effector frame
     times(0) = jog_msg->duration;
     new_orientation = cur_orientation
-                      * Eigen::AngleAxisd(jog_msg->displacements[2], Eigen::Vector3d::UnitY()).matrix() 
-                      * Eigen::AngleAxisd(jog_msg->displacements[1], Eigen::Vector3d::UnitX()).matrix()
-                      * Eigen::AngleAxisd(jog_msg->displacements[0], Eigen::Vector3d::UnitZ()).matrix();
+                      * Eigen::AngleAxisd(jog_msg->displacements[5], Eigen::Vector3d::UnitY()).matrix() 
+                      * Eigen::AngleAxisd(jog_msg->displacements[4], Eigen::Vector3d::UnitX()).matrix()
+                      * Eigen::AngleAxisd(jog_msg->displacements[3], Eigen::Vector3d::UnitZ()).matrix();
 
     euler_angles = new_orientation.eulerAngles(0, 1, 2);
 
-    xyz_positions(0, 0) = cur_pos[0] + jog_msg->displacements[3]; // x
-    xyz_positions(1, 0) = cur_pos[1] + jog_msg->displacements[4]; // y
-    xyz_positions(2, 0) = cur_pos[2] + jog_msg->displacements[5]; // z
+    xyz_positions(0, 0) = cur_pos[0] + jog_msg->displacements[0]; // x
+    xyz_positions(1, 0) = cur_pos[1] + jog_msg->displacements[1]; // y
+    xyz_positions(2, 0) = cur_pos[2] + jog_msg->displacements[2]; // z
 
     // Replan
     updateSE3Waypoints(use_traj_times_, times, xyz_positions, &euler_angles, false);

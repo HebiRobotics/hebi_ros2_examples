@@ -97,7 +97,6 @@ def generate_launch_description():
             {"robot_description": robot_description_content}
         ],
         namespace=prefix,
-        remappings=[('/joint_states', '/fdbk_joint_states')]
     )
 
     # Define the arm node
