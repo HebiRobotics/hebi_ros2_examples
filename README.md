@@ -32,7 +32,7 @@ rosdep install --from-paths src --ignore-src -r -y --include-eol-distros
 Then, build the workspace and source it using the following commands.
 ```
 cd ~/hebi_ws
-colcon build
+colcon build --symlink-install
 source install/setup.bash
 ```
 
