@@ -16,9 +16,6 @@
 #include "hebi_cpp_api/robot_config.hpp"
 #include "hebi_cpp_api/arm/arm.hpp"
 
-#include <chrono>
-#include <thread>
-
 
 namespace arm = hebi::experimental::arm;
 
@@ -32,56 +29,56 @@ public:
   
   ArmNode() : Node("arm_node") {
 
-  // Parameter Description
-  // Parameters passed into the node
-  auto config_file_des = rcl_interfaces::msg::ParameterDescriptor{};
-  auto config_package_des = rcl_interfaces::msg::ParameterDescriptor{};
+    // Parameter Descriptions
+    // Parameters passed into the node
+    auto config_file_des = rcl_interfaces::msg::ParameterDescriptor{};
+    auto config_package_des = rcl_interfaces::msg::ParameterDescriptor{};
+    auto prefix_des = rcl_interfaces::msg::ParameterDescriptor{};
 
-  // Parameters passed through config file changed during runtime
-  auto ik_seed_des = rcl_interfaces::msg::ParameterDescriptor{};
-  auto use_traj_times_des = rcl_interfaces::msg::ParameterDescriptor{};
-  auto compliant_mode_des = rcl_interfaces::msg::ParameterDescriptor{};
+    // Parameters passed through config file changed during runtime
+    auto ik_seed_des = rcl_interfaces::msg::ParameterDescriptor{};
+    auto use_traj_times_des = rcl_interfaces::msg::ParameterDescriptor{};
+    auto compliant_mode_des = rcl_interfaces::msg::ParameterDescriptor{};
 
-  config_file_des.description = "Config file for the arm of type .cfg.yaml.";
-  config_package_des.description = "Package containg the config file.";
-  ik_seed_des.description = "Seed for inverse kinematics. Can be changed during runtime.";
-  use_traj_times_des.description = "Can be changed during runtime.";
-  compliant_mode_des.description = "No arm motion can be commanded in compliant mode. Can be changed during runtime.";
+    config_file_des.description = "Config file for the arm of type .cfg.yaml.";
+    config_package_des.description = "Package containg the config file.";
+    prefix_des.description = "Prefix for the arm.";
+    ik_seed_des.description = "Seed for inverse kinematics. Can be changed during runtime.";
+    use_traj_times_des.description = "Can be changed during runtime.";
+    compliant_mode_des.description = "No arm motion can be commanded in compliant mode. Can be changed during runtime.";
 
-  // Declare default parameter values
-  this->declare_parameter("config_file", rclcpp::PARAMETER_STRING);
-  this->declare_parameter("config_package", rclcpp::PARAMETER_STRING);
-  this->declare_parameter("ik_seed", rclcpp::PARAMETER_DOUBLE_ARRAY);
-  this->declare_parameter("use_traj_times", true);
-  this->declare_parameter("compliant_mode", false);
+    // Declare default parameter values
+    this->declare_parameter("config_file", rclcpp::PARAMETER_STRING);
+    this->declare_parameter("config_package", rclcpp::PARAMETER_STRING);
+    this->declare_parameter("prefix", "");
+    this->declare_parameter("ik_seed", rclcpp::PARAMETER_DOUBLE_ARRAY);
+    this->declare_parameter("use_traj_times", true);
+    this->declare_parameter("compliant_mode", false);
 
-  // Get the parameters that are passed into the node
-  config_package_ = this->get_parameter("config_package").as_string();
-  config_file_ = this->get_parameter("config_file").as_string();
+    // Get the parameters that are passed into the node
+    config_package_ = this->get_parameter("config_package").as_string();
+    config_file_ = this->get_parameter("config_file").as_string();
 
-  // Initialize the arm with configs
-  if (!initializeArm()) {
-    RCLCPP_ERROR(this->get_logger(), "Could not initialize arm!");
-    return;
-  }
+    // Initialize the arm with configs
+    if (!initializeArm()) {
+      RCLCPP_ERROR(this->get_logger(), "Could not initialize arm!");
+      return;
+    }
 
-  // Create parameter callbacks for the remaining parameters, which can be changed during runtime
-  parameter_event_handler_ = std::make_shared<rclcpp::ParameterEventHandler>(this);
+    // Event handler for parameter changes
+    parameter_event_handler_ = std::make_shared<rclcpp::ParameterEventHandler>(this);
 
-  // Parameter callbacks
-  ik_seed_callback_handle_ = parameter_event_handler_->add_parameter_callback("ik_seed", std::bind(&ArmNode::ikSeedCallback, this, std::placeholders::_1));
-  use_traj_times_callback_handle_ = parameter_event_handler_->add_parameter_callback("use_traj_times", std::bind(&ArmNode::useTrajTimesCallback, this, std::placeholders::_1));
-  compliant_mode_callback_handle_ = parameter_event_handler_->add_parameter_callback("compliant_mode", std::bind(&ArmNode::compliantModeCallback, this, std::placeholders::_1));
+    // Parameter callbacks
+    ik_seed_callback_handle_ = parameter_event_handler_->add_parameter_callback("ik_seed", std::bind(&ArmNode::ikSeedCallback, this, std::placeholders::_1));
+    use_traj_times_callback_handle_ = parameter_event_handler_->add_parameter_callback("use_traj_times", std::bind(&ArmNode::useTrajTimesCallback, this, std::placeholders::_1));
+    compliant_mode_callback_handle_ = parameter_event_handler_->add_parameter_callback("compliant_mode", std::bind(&ArmNode::compliantModeCallback, this, std::placeholders::_1));
 
-  // Common Subscribers
-  joint_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("joint_jog", 50, std::bind(&ArmNode::jointJogCallback, this, std::placeholders::_1));
-  cartesian_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("cartesian_jog", 50, std::bind(&ArmNode::cartesianJogCallback, this, std::placeholders::_1));
-  SE3_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("SE3_jog", 50, std::bind(&ArmNode::SE3JogCallback, this, std::placeholders::_1));
-  joint_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("joint_trajectory", 50, std::bind(&ArmNode::jointWaypointsCallback, this, std::placeholders::_1));
-  cartesian_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("cartesian_trajectory", 50, std::bind(&ArmNode::cartesianWaypointsCallback, this, std::placeholders::_1));
-
-  // Subscribers specific to plugins
-
+    // Subscribers
+    joint_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("joint_jog", 50, std::bind(&ArmNode::jointJogCallback, this, std::placeholders::_1));
+    cartesian_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("cartesian_jog", 50, std::bind(&ArmNode::cartesianJogCallback, this, std::placeholders::_1));
+    SE3_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("SE3_jog", 50, std::bind(&ArmNode::SE3JogCallback, this, std::placeholders::_1));
+    joint_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("joint_trajectory", 50, std::bind(&ArmNode::jointWaypointsCallback, this, std::placeholders::_1));
+    cartesian_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("cartesian_trajectory", 50, std::bind(&ArmNode::cartesianWaypointsCallback, this, std::placeholders::_1));
 
     // Publishers
     arm_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("joint_states", 50);
@@ -97,22 +94,22 @@ public:
       "arm_motion",
       std::bind(&ArmNode::handleArmMotionGoal, this, std::placeholders::_1, std::placeholders::_2),
       std::bind(&ArmNode::handleArmMotionCancel, this, std::placeholders::_1),
-    std::bind(&ArmNode::handleArmMotionAccepted, this, std::placeholders::_1)
-  );
+      std::bind(&ArmNode::handleArmMotionAccepted, this, std::placeholders::_1)
+    );
 
-  timer_ = this->create_wall_timer(std::chrono::milliseconds(5), std::bind(&ArmNode::publishState, this));
+    timer_ = this->create_wall_timer(std::chrono::milliseconds(5), std::bind(&ArmNode::publishState, this));
 
-  // Go to home position
-  if (go_to_home_) {
-    try {
-      arm_->update();
-      arm_->setGoal(arm::Goal::createFromPosition(3.0, home_position_));
+    // Go to home position
+    if (home_position_available_) {
+      try {
+        arm_->update();
+        arm_->setGoal(arm::Goal::createFromPosition(3.0, home_position_));
+      }
+      catch (const std::runtime_error& e) {
+        RCLCPP_ERROR(this->get_logger(), "Could not go to home position: %s", e.what());
+        return;
+      }
     }
-    catch (const std::runtime_error& e) {
-      RCLCPP_ERROR(this->get_logger(), "Could not go to home position: %s", e.what());
-      return;
-    }
-  }
 
     // Raise homed flag only after it reaches the home position
     while (!arm_->atGoal() && rclcpp::ok()) {
@@ -122,14 +119,14 @@ public:
     RCLCPP_INFO(this->get_logger(), "Reached home position");
   }
 
-void update() {
-  // Update feedback, and command the arm to move along its planned path
-  // (this also acts as a loop-rate limiter so no 'sleep' is needed)
-  if (!arm_->update())
-    RCLCPP_WARN(this->get_logger(), "Error Getting Feedback -- Check Connection");
-  else if (!arm_->send())
-    RCLCPP_WARN(this->get_logger(), "Error Sending Commands -- Check Connection");
-}
+  void update() {
+    // Update feedback, and command the arm to move along its planned path
+    // (this also acts as a loop-rate limiter so no 'sleep' is needed)
+    if (!arm_->update())
+      RCLCPP_WARN(this->get_logger(), "Error Getting Feedback -- Check Connection");
+    else if (!arm_->send())
+      RCLCPP_WARN(this->get_logger(), "Error Sending Commands -- Check Connection");
+  }
 
 private:
 
@@ -143,7 +140,7 @@ private:
 
   bool compliant_mode_{false};
   Eigen::VectorXd home_position_ = Eigen::VectorXd::Constant(6, 0.01); // Default values are close to zero to avoid singularity
-  bool go_to_home_{false};
+  bool home_position_available_{false};
   int num_joints_;
 
   Eigen::VectorXd ik_seed_;
@@ -405,6 +402,11 @@ private:
 
     if (!arm_initialized_) {
       RCLCPP_ERROR(this->get_logger(), "Arm not initialized yet!");
+      return;
+    }
+
+    if (!home_position_available_) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Home position was not set in the config file!");
       return;
     }
 
@@ -732,13 +734,13 @@ private:
   // Each row is a separate joint; each column is a separate waypoint.
   void updateJointWaypoints(const bool use_traj_times, const Eigen::VectorXd& times, const Eigen::MatrixXd& angles, const Eigen::MatrixXd& velocities, const Eigen::MatrixXd& accelerations) {
     // Data sanity check:
-    if (angles.rows() != velocities.rows()                  || // Number of joints
-      angles.rows() != accelerations.rows()                 ||
-      angles.rows() != static_cast<long int>(arm_->size())  ||
-      angles.cols() != velocities.cols()                    || // Number of waypoints
-      angles.cols() != accelerations.cols()                 ||
-      angles.cols() != times.size()                         ||
-      angles.cols() == 0) {
+    if (angles.rows() != velocities.rows()                    || // Number of joints
+        angles.rows() != accelerations.rows()                 ||
+        angles.rows() != static_cast<long int>(arm_->size())  ||
+        angles.cols() != velocities.cols()                    || // Number of waypoints
+        angles.cols() != accelerations.cols()                 ||
+        angles.cols() != times.size()                         ||
+        angles.cols() == 0) {
       RCLCPP_ERROR(this->get_logger(), "Angles, velocities, accelerations, or times were not the correct size");
       return;
     }
@@ -852,7 +854,7 @@ private:
     }
     if (!arm_config) {
       RCLCPP_ERROR(this->get_logger(), "Failed to load configuration from: %s", config_file_path.c_str());
-      return -1;
+      return false;
     }
 
     // Create arm from config
@@ -871,71 +873,36 @@ private:
 
       // Check that home_position has the right length
       if (arm_config->getUserData().getFloatList("home_position").size() != num_joints_) {
-        errors.push_back("HEBI config \"user_data\"'s \"home_position\" field must have the same number of elements as degrees of freedom!");
+        RCLCPP_ERROR(this->get_logger(), "HEBI config \"user_data\"'s \"home_position\" field must have the same number of elements as degrees of freedom! Ignoring...");
         std::cout << num_joints_ << std::endl;
+        home_position_.fill(std::numeric_limits<double>::quiet_NaN());
       }
       else {
         home_position_ = Eigen::Map<Eigen::VectorXd>(arm_config->getUserData().getFloatList("home_position").data(), arm_config->getUserData().getFloatList("home_position").size());
-        go_to_home_ = true;
+        home_position_available_ = true;
         RCLCPP_INFO(this->get_logger(), "Found and successfully read 'home_position' parameter.");
       }
     } else {
-      errors.push_back("\"home_position\" not provided in config file. Not traveling to home.");
+      RCLCPP_WARN(this->get_logger(), "\"home_position\" not provided in config file. Not traveling to home.");
       home_position_.fill(std::numeric_limits<double>::quiet_NaN());
     }
 
     // Check if IK seed is provided
     if (arm_config->getUserData().hasFloatList("ik_seed")) {
 
-      // Check that ik_seed has the right length
+      // Check if ik_seed has the right length
       if (arm_config->getUserData().getFloatList("ik_seed").size() != num_joints_) {
-        errors.push_back("HEBI config \"user_data\"'s \"ik_seed\" field must have the same number of elements as degrees of freedom!");
+        RCLCPP_ERROR(this->get_logger(), "HEBI config \"user_data\"'s \"ik_seed\" field must have the same number of elements as degrees of freedom! Ignoring...");
         use_ik_seed_ = false;
-        std::cout << num_joints_ << std::endl;
       }
       else {
         ik_seed_ = Eigen::Map<Eigen::VectorXd>(arm_config->getUserData().getFloatList("ik_seed").data(), arm_config->getUserData().getFloatList("ik_seed").size());
         RCLCPP_INFO(this->get_logger(), "Found and successfully read 'ik_seed' parameter");
       }
     } else {
-      errors.push_back("\"ik_seed\" not provided in config file. Setting use_ik_seed to false.");
+      RCLCPP_WARN(this->get_logger(), "\"ik_seed\" not provided in config file. Setting use_ik_seed to false.");
       use_ik_seed_ = false;
     }
-
-    // If there are errors, print them and throw an exception
-    if (!errors.empty()) {
-        for (const auto& error : errors) {
-          RCLCPP_ERROR(this->get_logger(), error.c_str());
-        }
-    }
-
-    // // Get the "ik_seed" for the arm
-    // if (this->has_parameter("ik_seed")) {
-    //   this->get_parameter("ik_seed", ik_seed_vector);
-    //   if (ik_seed_vector.size() == 0)
-    //   {
-    //     RCLCPP_WARN(this->get_logger(), "'ik_seed' parameter is empty; Setting use_ik_seed to false!");
-    //     use_ik_seed_ = false;
-    //   }
-    //   else
-    //   {
-    //     RCLCPP_INFO(this->get_logger(), "Found and successfully read 'ik_seed' parameter");
-    //     if (ik_seed_vector.size() != this->arm_->size()) {
-    //       RCLCPP_WARN(this->get_logger(), "'ik_seed' parameter not the same length as HRDF file's number of DoF! Setting use_ik_seed to false!");
-    //       use_ik_seed_ = false;
-    //     }
-    //     else 
-    //     {
-    //       ik_seed_ = Eigen::VectorXd(arm_->size());
-    //       for (size_t i = 0; i < ik_seed_vector.size(); ++i) {
-    //         ik_seed_[i] = ik_seed_vector[i];
-    //       }
-    //     }
-    //   }
-    // } else {
-    //   RCLCPP_WARN(this->get_logger(), "Could not find/read 'ik_seed' parameter; Setting use_ik_seed to false!");
-    //   use_ik_seed_ = false;
-    // }
 
     // Get the "use_traj_times" for the arm
     if (this->has_parameter("use_traj_times")) {
@@ -945,7 +912,7 @@ private:
       use_traj_times_ = true;
     }
 
-    // Get the "prefix" for the joint state topic
+    // Get the "prefix" for the joint state topic names
     std::string prefix;
     if (this->has_parameter("prefix")) {
       this->get_parameter("prefix", prefix);
