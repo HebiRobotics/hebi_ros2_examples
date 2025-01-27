@@ -130,7 +130,11 @@ The arm node uses HEBI Arm API. It provides a variety of topics, services, and a
 - */inertia [geometry_msgs/msg/Inertia]*: Inertia of the arm
 
 **Action Servers**
-- */arm_motion [hebi_msgs/action/ArmMotion]*: 
+- */arm_motion [hebi_msgs/action/ArmMotion]*
+
+**Services**
+- */home [std_srvs/srv/Trigger]*: Service to home the arm
+- */stop [std_srvs/srv/Trigger]*: Service to stop arm motion. This service cannot stop an action execution. Actions can be stopped only by canceling the action.
 
 Apart from the parameters set using the file discussed above, the arm node also uses few extra parameters which you can set dynamically:
 - *compliant_mode*: Setting it to true disables any goal set to the arm and sets the joint efforts to zero for easy manual movement of the arm.
