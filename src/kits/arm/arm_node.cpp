@@ -8,7 +8,7 @@
 #include <geometry_msgs/msg/inertia.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <std_msgs/msg/bool.hpp>
-#include <std_srvs/srv/empty.hpp>
+#include <std_srvs/srv/trigger.hpp>
 #include <hebi_msgs/action/arm_motion.hpp>
 
 #include "hebi_cpp_api/group_command.hpp"
@@ -87,8 +87,8 @@ public:
     end_effector_pose_publisher_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("ee_pose", 50);
 
     // Services
-    home_service_ = this->create_service<std_srvs::srv::Empty>("home", std::bind(&ArmNode::homeCallback, this, std::placeholders::_1, std::placeholders::_2));
-    stop_service_ = this->create_service<std_srvs::srv::Empty>("stop", std::bind(&ArmNode::stopCallback, this, std::placeholders::_1, std::placeholders::_2));
+    home_service_ = this->create_service<std_srvs::srv::Trigger>("home", std::bind(&ArmNode::homeCallback, this, std::placeholders::_1, std::placeholders::_2));
+    stop_service_ = this->create_service<std_srvs::srv::Trigger>("stop", std::bind(&ArmNode::stopCallback, this, std::placeholders::_1, std::placeholders::_2));
     
     // Start the action server
     action_server_ = rclcpp_action::create_server<ArmMotion>(
@@ -165,8 +165,8 @@ private:
 
   rclcpp_action::Server<hebi_msgs::action::ArmMotion>::SharedPtr action_server_;
 
-  rclcpp::Service<std_srvs::srv::Empty>::SharedPtr home_service_;
-  rclcpp::Service<std_srvs::srv::Empty>::SharedPtr stop_service_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr home_service_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stop_service_;
 
   rclcpp::TimerBase::SharedPtr timer_;
 
@@ -414,73 +414,71 @@ private:
   ///////////////////////////// SERVICE CALLBACKS /////////////////////////////
 
   // Service callback for homing the arm
-  void homeCallback(const std::shared_ptr<std_srvs::srv::Empty::Request> request, std::shared_ptr<std_srvs::srv::Empty::Response> response) {
+  void homeCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> request, std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
     (void)request;
-    (void)response;
+
+    response->success = true;
 
     if (!arm_initialized_) {
-      RCLCPP_ERROR(this->get_logger(), "Arm not initialized yet!");
-      return;
+      response->success = false;
+      response->message = "Arm not initialized yet!";
     }
 
     if (compliant_mode_) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Deactivate compliant mode to use home service");
-      return;
+      response->success = false;
+      response->message = "Arm in compliant mode, cannot home arm";
     }
 
     if (has_active_action_) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Arm is executing an action, cannot home arm");
-      return;
+      response->success = false;
+      response->message = "Arm is executing an action, cannot home arm";
     }
 
     if (is_homing_) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Arm is already homing");
+      response->success = false;
+      response->message = "Arm is currently homing";
+    }
+
+    if (!response->success) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), response->message);
       return;
     }
 
-    // Go to home position
-    try {
-      is_homing_ = true;
-      arm_->update();
-      arm_->setGoal(arm::Goal::createFromPosition(3.0, home_position_));
-      RCLCPP_INFO(this->get_logger(), "Homing arm...");
-    }
-    catch (const std::runtime_error& e) {
-      RCLCPP_ERROR(this->get_logger(), "Could not go to home position: %s", e.what());
-      is_homing_ = false;
-      return;
-    }
-
-    // Raise homed flag only after it reaches the home position
-    while (!arm_->atGoal() && rclcpp::ok()) {
-      update();
-    }
-    is_homing_ = false;
-    RCLCPP_INFO(this->get_logger(), "Reached home position");
+    response->message = "Homing requested";
+    
+    // Start separate thread to home the arm
+    std::thread{std::bind(&ArmNode::homeArm, this)}.detach();
   }
 
   // Service callback for stopping the arm
-  void stopCallback(const std::shared_ptr<std_srvs::srv::Empty::Request> request, std::shared_ptr<std_srvs::srv::Empty::Response> response) {
+  void stopCallback(const std::shared_ptr<std_srvs::srv::Trigger::Request> request, std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
     (void)request;
-    (void)response;
+
+    response->success = true;
 
     if (!arm_initialized_) {
-      RCLCPP_ERROR(this->get_logger(), "Arm not initialized yet!");
-      return;
+      response->success = false;
+      response->message = "Arm not initialized yet!";
     }
 
     if (compliant_mode_) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Nothing to stop - arm is in compliant mode!");
-      return;
+      response->success = false;
+      response->message = "Arm in compliant mode, nothing to stop";
     }
 
     if (has_active_action_) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Cannot stop using /stop service, cancel the active action to stop arm motion");
+      response->success = false;
+      response->message = "Cannot stop using /stop service, cancel the active action to stop arm motion";
+    }
+
+    if (!response->success) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), response->message);
       return;
     }
 
     RCLCPP_INFO(this->get_logger(), "Stopping arm motion");
     stopArm();
+    response->message = "Stopped arm motion";
   }
 
   //////////////////////// SUBSCRIBER CALLBACK FUNCTIONS ////////////////////////
@@ -880,6 +878,28 @@ private:
       arm_->setGoal(arm::Goal::createFromPositions(times, positions));
     else
       arm_->setGoal(arm::Goal::createFromPositions(positions));
+  }
+
+  void homeArm() {
+    is_homing_ = true;
+    // Go to home position
+    try {
+      arm_->update();
+      arm_->setGoal(arm::Goal::createFromPosition(3.0, home_position_));
+      RCLCPP_INFO(this->get_logger(), "Homing arm...");
+    }
+    catch (const std::runtime_error& e) {
+      RCLCPP_ERROR(this->get_logger(), "Cannot set goal to home position: %s", e.what());
+      is_homing_ = false;
+      return;
+    }
+
+    // Raise homed flag only after it reaches the home position
+    while (!arm_->atGoal() && rclcpp::ok()) {
+      update();
+    }
+    is_homing_ = false;
+    RCLCPP_INFO(this->get_logger(), "Reached home position");
   }
 
   void stopArm() {
