@@ -102,7 +102,7 @@ arm_node:
     names: [ "J1_base", "J2_shoulder", "J3_elbow", "J4_wrist1", "J5_wrist2" ]
     families: [ "HEBI" ]
     gains_package: "hebi_description"
-    gains_file: "config/gains/A-2085-05_gains.xml"
+    gains_file: "config/gains/A-2085-05.xml"
     hrdf_package: "hebi_description"
     hrdf_file: "config/hrdf/A-2085-05.hrdf"
     home_position: [ 0.01, 2.09, 2.09, 1.5707963, 0.0 ]
@@ -555,7 +555,7 @@ names: "<names_as_string_separated_by_semicolon>"
 hrdf_pkg: "hebi_description"
 hrdf_file: "config/hrdf/<your_robot_name>.hrdf"
 gains_pkg: "hebi_description"
-gains_file: "config/gains/<your_robot_name>_gains.xml"
+gains_file: "config/gains/<your_robot_name>.xml"
 
 use_mock_hardware: true
 use_gazebo: false
