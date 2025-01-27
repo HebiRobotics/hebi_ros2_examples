@@ -88,6 +88,7 @@ public:
 
     // Services
     home_service_ = this->create_service<std_srvs::srv::Empty>("home", std::bind(&ArmNode::homeCallback, this, std::placeholders::_1, std::placeholders::_2));
+    stop_service_ = this->create_service<std_srvs::srv::Empty>("stop", std::bind(&ArmNode::stopCallback, this, std::placeholders::_1, std::placeholders::_2));
     
     // Start the action server
     action_server_ = rclcpp_action::create_server<ArmMotion>(
@@ -136,8 +137,9 @@ private:
 
   std::unique_ptr<arm::Arm> arm_;
 
-  bool arm_initialized_ = false; // Indicates that the end-effector has been homed initially
-  bool has_active_trajectory_ = false; // Indicates that an action is being executed
+  bool arm_initialized_{false};
+  bool has_active_action_{false};
+  bool is_homing_{false};
 
   bool compliant_mode_{false};
   Eigen::VectorXd home_position_;
@@ -164,6 +166,7 @@ private:
   rclcpp_action::Server<hebi_msgs::action::ArmMotion>::SharedPtr action_server_;
 
   rclcpp::Service<std_srvs::srv::Empty>::SharedPtr home_service_;
+  rclcpp::Service<std_srvs::srv::Empty>::SharedPtr stop_service_;
 
   rclcpp::TimerBase::SharedPtr timer_;
 
@@ -243,15 +246,27 @@ private:
   rclcpp_action::GoalResponse handleArmMotionGoal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const ArmMotion::Goal> goal) {
     RCLCPP_INFO(this->get_logger(), "Received arm motion action request");
     (void)uuid;
+    if (!arm_initialized_) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - arm not initialized!");
+      return rclcpp_action::GoalResponse::REJECT;
+    }
     if (compliant_mode_) {
       RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - in compliant mode!");
       return rclcpp_action::GoalResponse::REJECT;
     }
-    else if (goal->wp_type != ArmMotion::Goal::CARTESIAN_SPACE && goal->wp_type != ArmMotion::Goal::JOINT_SPACE) {
+    if (has_active_action_) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - arm already has an active trajectory!");
+      return rclcpp_action::GoalResponse::REJECT;
+    }
+    if (is_homing_) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - arm is currently homing!");
+      return rclcpp_action::GoalResponse::REJECT;
+    }
+    if (goal->wp_type != ArmMotion::Goal::CARTESIAN_SPACE && goal->wp_type != ArmMotion::Goal::JOINT_SPACE) {
       RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - invalid waypoint type, should be 'CARTESIAN' or 'JOINT'");
       return rclcpp_action::GoalResponse::REJECT;
     }
-    else if (goal->waypoints.points.empty()) {
+    if (goal->waypoints.points.empty()) {
       RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - no waypoints specified");
       return rclcpp_action::GoalResponse::REJECT;
     }
@@ -273,8 +288,8 @@ private:
   void startArmMotion(const std::shared_ptr<GoalHandleArmMotion> goal_handle) {
     RCLCPP_INFO(this->get_logger(), "Executing arm motion action");
     
-    // Acting flag should remain true while any action is being executed
-    has_active_trajectory_ = true;
+    // Set active action flag
+    has_active_action_ = true;
 
     // Wait until the action is complete, sending status/feedback along the way.
     rclcpp::Rate r(10);
@@ -329,8 +344,8 @@ private:
           result->success = false;
           goal_handle->abort(result);
 
-          // Reset acting flag
-          has_active_trajectory_ = false;
+          // Reset active action flag
+          has_active_action_ = false;
           return;
         }
 
@@ -353,13 +368,14 @@ private:
     while (!arm_->atGoal() && rclcpp::ok()) {
       // Check if there is a cancel request
       if (goal_handle->is_canceling()) {
+        stopArm();
         result->success = false;
         goal_handle->canceled(result);
         setColor({0, 0, 0, 0});
         RCLCPP_INFO(this->get_logger(), "Arm motion was cancelled");
         
-        // Reset acting flag
-        has_active_trajectory_ = false;
+        // Reset active action flag
+        has_active_action_ = false;
         return;
       }
 
@@ -370,8 +386,8 @@ private:
         setColor({0, 0, 0, 0});
         RCLCPP_INFO(this->get_logger(), "Arm motion was aborted due to compliant mode activation");
         
-        // Reset acting flag
-        has_active_trajectory_ = false;
+        // Reset active action flag
+        has_active_action_ = false;
         return;
       }
 
@@ -389,13 +405,15 @@ private:
       goal_handle->succeed(result);
       RCLCPP_INFO(this->get_logger(), "Completed arm motion action");
       setColor({0, 0, 0, 0});
-      // Reset acting flag
-      has_active_trajectory_ = false;
+      // Reset active action flag
+      has_active_action_ = false;
     }
 
   }
 
-  //////////////////////// HOME SERVICE CALLBACK FUNCTION ////////////////////////
+  ///////////////////////////// SERVICE CALLBACKS /////////////////////////////
+
+  // Service callback for homing the arm
   void homeCallback(const std::shared_ptr<std_srvs::srv::Empty::Request> request, std::shared_ptr<std_srvs::srv::Empty::Response> response) {
     (void)request;
     (void)response;
@@ -410,20 +428,26 @@ private:
       return;
     }
 
-    if (has_active_trajectory_) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Arm is currently executing an action; cannot home");
+    if (has_active_action_) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Arm is executing an action, cannot home arm");
+      return;
+    }
+
+    if (is_homing_) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Arm is already homing");
       return;
     }
 
     // Go to home position
     try {
-      has_active_trajectory_ = true;
+      is_homing_ = true;
       arm_->update();
       arm_->setGoal(arm::Goal::createFromPosition(3.0, home_position_));
+      RCLCPP_INFO(this->get_logger(), "Homing arm...");
     }
     catch (const std::runtime_error& e) {
       RCLCPP_ERROR(this->get_logger(), "Could not go to home position: %s", e.what());
-      has_active_trajectory_ = false;
+      is_homing_ = false;
       return;
     }
 
@@ -431,19 +455,66 @@ private:
     while (!arm_->atGoal() && rclcpp::ok()) {
       update();
     }
-    has_active_trajectory_ = false;
+    is_homing_ = false;
     RCLCPP_INFO(this->get_logger(), "Reached home position");
+  }
+
+  // Service callback for stopping the arm
+  void stopCallback(const std::shared_ptr<std_srvs::srv::Empty::Request> request, std::shared_ptr<std_srvs::srv::Empty::Response> response) {
+    (void)request;
+    (void)response;
+
+    if (!arm_initialized_) {
+      RCLCPP_ERROR(this->get_logger(), "Arm not initialized yet!");
+      return;
+    }
+
+    if (compliant_mode_) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Nothing to stop - arm is in compliant mode!");
+      return;
+    }
+
+    if (has_active_action_) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Cannot stop using /stop service, cancel the active action to stop arm motion");
+      return;
+    }
+
+    RCLCPP_INFO(this->get_logger(), "Stopping arm motion");
+    stopArm();
   }
 
   //////////////////////// SUBSCRIBER CALLBACK FUNCTIONS ////////////////////////
 
+  // Common subscriber condition checks for the arm
+  bool checkArmConditions(std::string topic_name) {
+    if (!arm_initialized_) {
+      RCLCPP_ERROR(this->get_logger(), "Arm is not initialized yet!");
+      return false;
+    }
+
+    if (compliant_mode_) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Arm in compliant mode, ignoring " << topic_name);
+      return false;
+    }
+
+    if (has_active_action_) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Arm is executing an action, ignoring " << topic_name);
+      return false;
+    }
+
+    if (is_homing_) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Arm is currently homing, ignoring " << topic_name);
+      return false;
+    }
+
+    return true;
+  }
+
   // Callback for trajectories with joint angle waypoints
   void jointWaypointsCallback(const trajectory_msgs::msg::JointTrajectory::SharedPtr joint_trajectory) {
 
-    if (compliant_mode_) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Deactivate compliant mode to use joint trajectory");
+    if (!checkArmConditions("joint_trajectory"))
       return;
-    }
 
     if (joint_trajectory->points.empty()) {
       RCLCPP_ERROR_STREAM(this->get_logger(), "No waypoints specified");
@@ -487,10 +558,8 @@ private:
   // Callback for trajectories with cartesian position waypoints
   void cartesianWaypointsCallback(const trajectory_msgs::msg::JointTrajectory::SharedPtr target_waypoints) {
 
-    if (compliant_mode_) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Deactivate compliant mode to use cartesian trajectory");
+    if (!checkArmConditions("cartesian_trajectory"))
       return;
-    }
 
     if (target_waypoints->points.empty()) {
       RCLCPP_ERROR_STREAM(this->get_logger(), "No waypoints specified");
@@ -519,13 +588,8 @@ private:
   // "Jog" the arm along each joint
   void jointJogCallback(const control_msgs::msg::JointJog::SharedPtr jog_msg) {
 
-    if (!arm_initialized_)
+    if (!checkArmConditions("joint_jog"))
       return;
-
-    if (compliant_mode_) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Deactivate compliant mode to use joint jog");
-      return;
-    }
 
     bool inc_vel = true;
     if (jog_msg->velocities.empty()) {
@@ -568,13 +632,8 @@ private:
   // smoothly to the new location
   void cartesianJogCallback(const control_msgs::msg::JointJog::SharedPtr jog_msg) {
 
-    if (!arm_initialized_)
+    if (!checkArmConditions("cartesian_jog"))
       return;
-
-    if (compliant_mode_) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Deactivate compliant mode to use cartesian jog");
-      return;
-    }
 
     if (jog_msg->displacements.size() != 3) {
       RCLCPP_ERROR_STREAM(this->get_logger(), "Displacement size not correct");
@@ -611,13 +670,8 @@ private:
   // First three entires are linear, and last three are angular
   void SE3JogCallback(const control_msgs::msg::JointJog::SharedPtr jog_msg) {
 
-    if (!arm_initialized_ || has_active_trajectory_)
+    if (!checkArmConditions("SE3_jog"))
       return;
-
-    if (compliant_mode_) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Deactivate compliant mode to use SE(3) jog");
-      return;
-    }
 
     if (jog_msg->displacements.size() != 6) {
       RCLCPP_ERROR_STREAM(this->get_logger(), "Displacement size not correct");
@@ -826,6 +880,12 @@ private:
       arm_->setGoal(arm::Goal::createFromPositions(times, positions));
     else
       arm_->setGoal(arm::Goal::createFromPositions(positions));
+  }
+
+  void stopArm() {
+    arm_->setGoal(arm::Goal::createFromPosition(arm_->lastFeedback().getPosition())); // Stop the arm at the current position
+    RCLCPP_INFO(this->get_logger(), "Arm stopped");
+    if (is_homing_) is_homing_ = false; // If we were homing, stop the homing process
   }
 
   /////////////////// Initialize arm ///////////////////
