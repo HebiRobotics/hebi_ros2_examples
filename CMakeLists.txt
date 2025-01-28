@@ -35,7 +35,7 @@ include_directories(
   include
 )
 
-add_executable(arm_node src/kits/arm/arm_node.cpp)
+add_executable(arm_node src/kits/arms/arm_node.cpp)
 ament_target_dependencies(arm_node
   rclcpp
   rclcpp_action
@@ -49,7 +49,7 @@ ament_target_dependencies(arm_node
   control_msgs
 )
 
-add_executable(move_arm src/kits/arm/move_arm.cpp)
+add_executable(move_arm src/kits/arms/move_arm.cpp)
 ament_target_dependencies(move_arm
   rclcpp
   rclcpp_action
@@ -58,7 +58,7 @@ ament_target_dependencies(move_arm
   geometry_msgs
 )
 
-add_executable(joystick_node src/kits/arm/joystick_node.cpp)
+add_executable(joystick_node src/kits/arms/joystick_node.cpp)
 ament_target_dependencies(joystick_node
   rclcpp
   rclcpp_action
@@ -71,7 +71,7 @@ ament_target_dependencies(joystick_node
   std_srvs
 )
 
-add_executable(omni_base_node src/kits/base/omni_base_node.cpp src/kits/base/util/omni_base.cpp src/kits/base/util/odom_publisher.cpp)
+add_executable(omni_base_node src/kits/bases/omni_base_node.cpp src/kits/bases/util/omni_base.cpp src/kits/bases/util/odom_publisher.cpp)
 ament_target_dependencies(omni_base_node
   rclcpp
   rclcpp_action
@@ -86,7 +86,7 @@ ament_target_dependencies(omni_base_node
   tf2_ros
 )
 
-add_executable(mecanum_base_node src/kits/base/mecanum_base_node.cpp src/kits/base/util/mecanum_base.cpp src/kits/base/util/odom_publisher.cpp)
+add_executable(mecanum_base_node src/kits/bases/mecanum_base_node.cpp src/kits/bases/util/mecanum_base.cpp src/kits/bases/util/odom_publisher.cpp)
 ament_target_dependencies(mecanum_base_node
   rclcpp
   rclcpp_action
@@ -101,7 +101,7 @@ ament_target_dependencies(mecanum_base_node
   tf2_ros
 )
 
-add_executable(diff_drive_node src/kits/base/diff_drive_node.cpp src/kits/base/util/diff_drive.cpp src/kits/base/util/odom_publisher.cpp)
+add_executable(diff_drive_node src/kits/bases/diff_drive_node.cpp src/kits/bases/util/diff_drive.cpp src/kits/bases/util/odom_publisher.cpp)
 ament_target_dependencies(diff_drive_node
   rclcpp
   rclcpp_action
