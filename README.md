@@ -32,13 +32,13 @@ rosdep install --from-paths src --ignore-src -r -y --include-eol-distros
 Then, build the workspace and source it using the following commands.
 ```
 cd ~/hebi_ws
-colcon build
+colcon build --symlink-install
 source install/setup.bash
 ```
 
 ### Create HRDF
 
-To control your HEBI arm using the standalone API, you do not require a URDF file for robot description. Instead, we use a HRDF to describe the HEBI Arm.
+To control your HEBI arm using the standalone API, you do not require a URDF file for robot description. Instead, we use a HRDF to describe the HEBI Arm. For more information, refer https://docs.hebi.us/tools.html#robot-description-format.
 
 For example, the HRDF for A-2085-05 arm is shown below.
 ```
@@ -67,50 +67,64 @@ For example, the HRDF for A-2085-05 arm is shown below.
 
 ### Arm Node
 
-To control the arm with our `arm_node`, you need to create a parameter file `<your_robot_name>_params.yaml` file in `config` folder of the `hebi_ros2_examples` package.
+To control the arm with our `arm_node`, you need to create a HEBI config file, which is a YAML file. It contains all the parameters required to connect with the arm and also define its behavior (refer https://docs.hebi.us/tools.html#robot-config-format). An example config for the A-2085-05 arm is given below:
+```
+# X-Series 5-DoF Arm
+version: 1.0
+families: ["Arm"]
+names: ["J1_base", "J2_shoulder", "J3_elbow", "J4_wrist1", "J5_wrist2"]
+hrdf: "hrdf/A-2085-05.hrdf"
 
-The configuration file takes the following form:
+gains:
+  default: "gains/A-2085-05.xml"
+
+user_data:
+  # Default seed positions for doing inverse kinematics
+  ik_seed_pos: [0.01, 1.0, 2.5, 1.5, -1.5]
+  home_position: [0.0, 2.09, 2.09, 1.57, 0.0]
+
+plugins:
+  - type: GravityCompensationEffort
+    name: gravComp
+    enabled: true
+    ramp_time: 5
+
+  - type: DynamicsCompensationEffort
+    name: dynamicsComp
+    enabled: true
+    ramp_time: 5
+
+  # Kits with a gas spring need to add a shoulder compensation torque.
+  # It should be around -7 Nm for most kits, but it may need to be tuned
+  # for your specific setup.
+  - name: 'gasSpringCompensation'
+    type: EffortOffset
+    enabled: false
+    ramp_time: 5
+    offset: [0, -7, 0, 0, 0]
+
+```
+**NOTE:** `names` and `families` of your modules can be found and changed using Scope.
+
+The `arm_node` takes in the following parameters:
 ```
 arm_node:
   ros__parameters:
-    names:
-    families:
-    gains_package:
-    gains_file:
-    hrdf_package:
-    hrdf_file:
-    home_position:
+    prefix:
+    config_package:
+    config_file:
 ```
 
 The parameters are defined as follows -
-- `names`: Array of "Names" of the HEBI Modules
-- `families`: Array of "Family" of HEBI Modules
-- `gains_package`: ROS package containing the gains file for your HEBI arm
-- `gains_file`: Relative path of the gains file from the gains_package
-- `hrdf_package`: ROS package containing the HRDF file for your HEBI arm
-- `hrdf_file`: Relative path of the HRDF file from the hrdf_package
-- `home_position`: Array of float values to move your arm after initialization.
+- `config_package`: ROS package where the config file is stored
+- `config_file`: Relative path of the config file from the config_package
+- `prefix`: Namespace for the topics and prefix for the joint names that will be published in the /joint_state topic
 
-**NOTE:**
-- `names` and `families` of your modules can be found and changed using Scope.
-<!-- - If the length of `home_position` array is greater than the number of joints, the remaining values will be ignored. **TO BE IMPLEMENTED** -->
+By default, the `arm.launch.py` launch file sets the `config package` parameter to the `hebi_description` package and the config file to `<your_robot_name>.cfg.yaml` file. Hence, it is recommended to name using these conventions or set the parameters while launching.
 
-The configuration file for HEBI Arm A-2085-05 is given below.
+You can launch the arm node using the following command:
 ```
-arm_node:
-  ros__parameters:
-    names: [ "J1_base", "J2_shoulder", "J3_elbow", "J4_wrist1", "J5_wrist2" ]
-    families: [ "HEBI" ]
-    gains_package: "hebi_description"
-    gains_file: "config/gains/A-2085-05_gains.xml"
-    hrdf_package: "hebi_description"
-    hrdf_file: "config/hrdf/A-2085-05.hrdf"
-    home_position: [ 0.01, 2.09, 2.09, 1.5707963, 0.0 ]
-```
-
-Once you have both these files, you can run the arm node using the following command:
-```
-ros2 launch hebi_ros2_examples arm_node.launch.py hebi_arm:=<your_robot_name>
+ros2 launch hebi_ros2_examples arm.launch.py hebi_arm:=<your_robot_name>
 ```
 
 **NOTE:** Do not forget to build your workspace and source your setup before running the above command.
@@ -142,9 +156,10 @@ Apart from the parameters set using the file discussed above, the arm node also 
 
 To get you started, we have provided three example scripts that use the `arm_node`.
 
-1. `ex_publish_trajectory`: This published a predefined trajectory to the `/joint_trajectory` topic.
-2. `ex_teach_repeat_mobileio`: This uses mobile IO to record and play trajetories, or go to saved waypoints.
-3. `ex_teleop_mobileio`: This uses mobile IO to send jog commands to control the arm.
+1. `move_arm`: This publishes a predefined trajectory using `arm_motion` action
+2. `ex_publish_trajectory`: This publishes a predefined trajectory to the `/joint_trajectory` topic.
+3. `ex_teach_repeat_mobileio`: This uses mobile IO to record and play trajetories, or go to saved waypoints.
+4. `ex_teleop_mobileio`: This uses mobile IO to send jog commands to control the arm.
 
 ## HRDF to URDF
 
@@ -226,15 +241,14 @@ The template for a HEBI Arm ROS2 Control Macro file is as follows:
 
   <xacro:macro name="<your_robot_name>_ros2_control" params="
                 name
+                prefix
                 use_mock_hardware:=^|false
                 mock_sensor_commands:=^|false
+                sim_gazebo_classic:=^|false     <!-- Not applicable in ROS 2 Jazzy -->
                 sim_gazebo:=^|false
                 families
-                names
-                hrdf_pkg
-                hrdf_file
-                gains_pkg
-                gains_file"
+                config_pkg
+                config_file"
                >
 
     <ros2_control name="${name}" type="system">
@@ -244,16 +258,16 @@ The template for a HEBI Arm ROS2 Control Macro file is as follows:
           <plugin>mock_components/GenericSystem</plugin>
           <param name="mock_sensor_commands">${mock_sensor_commands}</param>
         </xacro:if>
-        <xacro:if value="${sim_gazebo}">
+        <xacro:if value="${sim_gazebo_classic}">    <!-- Not applicable in ROS 2 Jazzy -->
           <plugin>gazebo_ros2_control/GazeboSystem</plugin>
         </xacro:if>
-        <xacro:unless value="${use_mock_hardware or sim_gazebo}">
-          <param name="families">${families}</param>
-          <param name="names">${names}</param>
-          <param name="hrdf_pkg">${hrdf_pkg}</param>
-          <param name="hrdf_file">${hrdf_file}</param>
-          <param name="gains_pkg">${gains_pkg}</param>
-          <param name="gains_file">${gains_file}</param>
+        <xacro:if value="${sim_gazebo}">
+          <plugin>ign_ros2_control/IgnitionSystem</plugin>    <!-- For ROS 2 Humble -->
+          <plugin>gz_ros2_control/GazeboSimSystem</plugin>    <!-- For ROS 2 Iron/Jazzy -->
+        </xacro:if>
+        <xacro:unless value="${use_mock_hardware or sim_gazebo_classic or sim_gazebo}">
+          <param name="config_pkg">${config_pkg}</param>
+          <param name="config_file">${config_file}</param>
           <plugin>hebi_hardware/HEBIHardwareInterface</plugin>
         </xacro:unless>
       </hardware>
@@ -296,15 +310,13 @@ The template for the combined URDF xacro file is given below:
 <?xml version="1.0" encoding="UTF-8"?>
 <robot xmlns:xacro="http://wiki.ros.org/xacro" name="<your_robot_name>">
 
-  <xacro:arg name="families" default="" />
-  <xacro:arg name="names" default="" />
-  <xacro:arg name="hrdf_pkg" default="" />
-  <xacro:arg name="hrdf_file" default="" />
-  <xacro:arg name="gains_pkg" default="" />
-  <xacro:arg name="gains_file" default="" />
+  <xacro:arg name="config_pkg" default="" />
+  <xacro:arg name="config_file" default="" />
+  <xacro:arg name="prefix" default="" />
 
   <xacro:arg name="use_mock_hardware" default="false" />
   <xacro:arg name="mock_sensor_commands" default="false" />
+  <xacro:arg name="sim_gazebo_classic" default="false" />    <!-- Not applicable in ROS 2 Jazzy -->
   <xacro:arg name="sim_gazebo" default="false" />
 
   <xacro:include filename="/path/to/ros2_control_macro_file"/>
@@ -324,13 +336,11 @@ The template for the combined URDF xacro file is given below:
     name="<your_robot_name>"
     use_mock_hardware="$(arg use_mock_hardware)"
     mock_sensor_commands="$(arg mock_sensor_commands)"
+    sim_gazebo_classic="$(arg sim_gazebo_classic)"
     sim_gazebo="$(arg sim_gazebo)"
-    families="$(arg families)"
-    names="$(arg names)"
-    hrdf_pkg="$(arg hrdf_pkg)"
-    hrdf_file="$(arg hrdf_file)"
-    gains_pkg="$(arg gains_pkg)"
-    gains_file="$(arg gains_file)" />
+    config_pkg="$(arg config_pkg)"
+    config_file="$(arg config_file)"
+    prefix="$(arg prefix)" />
 
 </robot>
 ```
@@ -393,14 +403,16 @@ hebi_arm_controller:
 
 To execute the ROS 2 Control node with the hardware, run the following command:
 ```
-ros2 launch hebi_bringup bringup_arm.launch.py hebi_arm:=<your_robot_name> families:="<string_families_separated_by_semicolon>" names:="<string_names_separated_by_semicolon>"
-use_mock_hardware:=true/false # Default is true
+ros2 launch hebi_bringup bringup_arm.launch.py hebi_arm:=<your_robot_name> config_pkg:=<config_pkg> config_file_path:="<config_file_path>"
+use_mock_hardware:=true/false
 ```
-Here is an example for A-2085-05:
+The default value of `use_mock_hardware` is true, and not setting `config_pkg` and `config_file_path` explicitly will default them to `hebi_description` and `config/<hebi_arm>.cfg.yaml` respectively.
+
+Here is an example to launch A-2085-05 arm with mock hardware:
 ```
-ros2 launch hebi_bringup bringup_arm.launch.py hebi_arm:=A-2085-05 families:="HEBI" names:="J1_base;J2_shoulder;J3_elbow;J4_wrist1;J5_wrist2"
+ros2 launch hebi_bringup bringup_arm.launch.py hebi_arm:=A-2085-05
 ```
-There are many arguments that can be passed to the `bringup_arm.launch.py` file. Please refer the launch file to see all the parameters.
+There are other arguments that can be passed to the `bringup_arm.launch.py` file. Please refer the launch file to see all the parameters.
 
 ### Gazebo Classic
 
@@ -428,12 +440,12 @@ You can use the same launch file `test_joint_trajectory_controller.launch.py` to
 
 ## MoveIt
 
-To use MoveIt with HEBI Arm, you need the ROS 2 control repositories and also the following:
+To use MoveIt with an HEBI Arm, you will need SRDF and other configuration files that MoveIt requires along with the ROS 2 control repositories mentioned above. These files for the standard HEBI kits are provided and can be downloaded using the following command:
 ```
 git clone -b ros2 https://github.com/HebiRobotics/hebi_moveit_configs.git
 ```
 
-Additionall, you will need to create a MoveIt configuration package for your arm. The steps to do so are given below.
+However, if you have a custom setup, you will need to create a MoveIt configuration package for your arm using the MoveIt Setup Assistant.
 
 ### Create MoveIt Configuration Package
 
@@ -490,77 +502,6 @@ Click on the `Configuration Files` tab, and select the desired output directory.
 
 Finally, click on `Exit Setup Assistant` button to exit the MoveIt Setup Assistant.
 
-To enable the MoveIt to access the HEBI Hardware Interface, you will need to make the following changes in the `<your_robot_name>_moveit_config` package.
-
-### config/<your_robot_name>.ros2_control.xacro
-
-After the line `
-<xacro:property name="initial_positions" value="${load_yaml(initial_positions_file)['initial_positions']}"/>
-`, add the following:
-```
-<xacro:property name="families" value="${load_yaml(initial_positions_file)['families']}"/>
-<xacro:property name="names" value="${load_yaml(initial_positions_file)['names']}"/>
-<xacro:property name="hrdf_pkg" value="${load_yaml(initial_positions_file)['hrdf_pkg']}"/>
-<xacro:property name="hrdf_file" value="${load_yaml(initial_positions_file)['hrdf_file']}"/>
-<xacro:property name="gains_pkg" value="${load_yaml(initial_positions_file)['gains_pkg']}"/>
-<xacro:property name="gains_file" value="${load_yaml(initial_positions_file)['gains_file']}"/>
-<xacro:property name="use_mock_hardware" value="${load_yaml(initial_positions_file)['use_mock_hardware']}"/>
-<xacro:property name="use_gazebo" value="${load_yaml(initial_positions_file)['use_gazebo']}"/>
-```
-
-Replace the `<hardware>` tag with the following:
-```
-<hardware>
-  <xacro:if value="${use_mock_hardware}">
-    <plugin>mock_components/GenericSystem</plugin>
-  </xacro:if>
-  <xacro:if value="${use_gazebo}">
-    <plugin>gazebo_ros2_control/GazeboSystem</plugin>
-  </xacro:if>
-  <xacro:unless value="${use_mock_hardware or use_gazebo}">
-    <!-- Parameters to initialize the Components -->
-    <param name="families">${families}</param>
-    <param name="names">${names}</param>
-    <param name="hrdf_pkg">${hrdf_pkg}</param>
-    <param name="hrdf_file">${hrdf_file}</param>
-    <param name="gains_pkg">${gains_pkg}</param>
-    <param name="gains_file">${gains_file}</param>
-    <plugin>hebi_hardware/HEBIHardwareInterface</plugin>
-  </xacro:unless>
-</hardware>
-```
-
-After the `<ros2_control>` tag, add the following:
-```
-<!-- Gazebo Classic plugins -->
-<xacro:if value="${use_gazebo}">
-  <gazebo>
-    <plugin filename="libgazebo_ros2_control.so" name="gazebo_ros2_control">
-      <parameters>$(find hebi_a-2085-06)/config/ros2_controllers.yaml</parameters>
-    </plugin>
-  </gazebo>
-</xacro:if>
-```
-
-The final file for A-2085-05 looks like this: <link_to_github_file>
-
-### config/initial_positions.yaml
-
-At the end of the file, add the following:
-```
-families: "<families_as_string_separated_by_semicolon>"
-
-names: "<names_as_string_separated_by_semicolon>"
-
-hrdf_pkg: "hebi_description"
-hrdf_file: "config/hrdf/<your_robot_name>.hrdf"
-gains_pkg: "hebi_description"
-gains_file: "config/gains/<your_robot_name>_gains.xml"
-
-use_mock_hardware: true
-use_gazebo: false
-```
-
 To test the MoveIt configuration, run the following command:
 ```
 ros2 launch <your_robot_name>_moveit_config demo.launch.py
@@ -573,5 +514,30 @@ If the launch is successful, a RViz window opens up with the arm and a GUI to co
 
 To check if the MoveIt is able to plan and execute the trajectories, click on the `Planning` tab on the left sidebar, and choose `home` as the GoalState. Click on `Plan and Execute` button. This will plan and execute the trajectory to the `home` position, and you should see the arm move to the `home` position.
 
-To test the MoveIt configuration with the hardware, change the `use_mock_hardware` to `false` in the `initial_positions.yaml` file, and relaunch the `demo.launch.py` file. This will launch the MoveIt with the hardware interface. Now, you can plan and execute the trajectories with the hardware.
-**NOTE:** Do not forget to build your workspace and source your setup before relaunching.
+### MoveIt on the Hardware / Gazebo
+
+The URDF files in the MoveIt config directory does not have access to HEBI Hardware plugin or Gazebo plugins which we defined while setting up ROS2 control URDF files.
+
+Modifying the URDF, SRDF, and launch files can prove to be difficult and hence, we have provided `move_group.launch.py` in the `hebi_bringup` package.
+
+This launch file is supposed to be used in parallel with `bringup_arm` launch files, either directly on the hardware or on Gazebo.
+
+For example, either run
+```
+ros2 launch hebi_bringup bringup_arm.launch.py hebi_arm:=A-2085-05 use_mock_hardware:=false use_rviz:=false
+```
+or
+```
+ros2 launch hebi_bringup bringup_arm_gazebo_classic.launch.py hebi_arm:=A-2085-05 use_rviz:=false
+```
+or
+```
+ros2 launch hebi_bringup bringup_arm_gazebo.launch.py hebi_arm:=A-2085-05 use_rviz:=false
+```
+
+Then run
+```
+ros2 launch hebi_bringup move_group.launch.py hebi_arm:=A-2085-05
+```
+
+We set `use_rviz` as false in the first launch file to prevent duplicate RViz windows. Once you run the `move_group` launch command, you should see an RViz window with MoveIt loaded.

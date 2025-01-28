@@ -1,13 +1,8 @@
 arm/:
   arm_node:
     ros__parameters:
-      names: [ "J1_base", "J2_shoulder", "J3_elbow", "J4_wrist1", "J5_wrist2", "J6_wrist3" ]
-      families: [ "Arm" ]
-      gains_package: "hebi_description"
-      gains_file: "config/gains/A-2085-06_gains.xml"
-      hrdf_package: "hebi_description"
-      hrdf_file: "config/hrdf/A-2085-06.hrdf"
-      home_position: [ 0.0, 2.09439, 2.09439, 0.0, 1.57079, 0.0 ]
+      config_package: "hebi_description"
+      config_file: "config/A-2085-06.cfg.yaml"
 
 omni_base_node:
   ros__parameters:

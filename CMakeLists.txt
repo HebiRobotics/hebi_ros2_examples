@@ -5,9 +5,9 @@ if(NOT CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD 14)
 endif()
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  add_compile_options(-Wall -Wextra -Wpedantic)
-endif()
+# if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  # add_compile_options(-Wall -Wextra)
+# endif()
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
@@ -58,8 +58,8 @@ ament_target_dependencies(move_arm
   geometry_msgs
 )
 
-add_executable(xbox_arm src/kits/arm/xbox_arm.cpp)
-ament_target_dependencies(xbox_arm
+add_executable(joystick_node src/kits/arm/joystick_node.cpp)
+ament_target_dependencies(joystick_node
   rclcpp
   rclcpp_action
   trajectory_msgs
@@ -68,6 +68,7 @@ ament_target_dependencies(xbox_arm
   hebi_cpp_api
   hebi_msgs
   control_msgs
+  std_srvs
 )
 
 add_executable(omni_base_node src/kits/base/omni_base_node.cpp src/kits/base/util/omni_base.cpp src/kits/base/util/odom_publisher.cpp)
@@ -150,7 +151,7 @@ install(TARGETS
   diff_drive_node
   # hexapod_control
   treaded_base_node
-  xbox_arm
+  joystick_node
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS
@@ -165,10 +166,17 @@ install(PROGRAMS
   scripts/ex_publish_trajectory.py
   scripts/ex_teach_repeat_mobileio.py
   scripts/ex_teleop_mobileio.py
+  scripts/mobile_io/mobile_io_node.py
   scripts/mobile_io/record_and_play_io.py
   scripts/mobile_io/rosie_io.py
   scripts/mobile_io/hexapod_io.py
   scripts/utils/joint_state_combiner.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+# Install Python utilities
+install(PROGRAMS
+  hebi_ros2_examples/hebi_util.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
