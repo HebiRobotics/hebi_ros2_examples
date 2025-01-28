@@ -954,7 +954,6 @@ private:
       // Check that home_position has the right length
       if (arm_config->getUserData().getFloatList("home_position").size() != num_joints_) {
         RCLCPP_ERROR(this->get_logger(), "HEBI config \"user_data\"'s \"home_position\" field must have the same number of elements as degrees of freedom! Ignoring...");
-        std::cout << num_joints_ << std::endl;
         home_position_.fill(std::numeric_limits<double>::quiet_NaN());
       }
       else {
