@@ -924,7 +924,7 @@ private:
 
     // Resolve the config file path using the package share directory
     const std::string package_share_directory = ament_index_cpp::get_package_share_directory(config_package_);
-    const std::string config_file_path = package_share_directory + "/config/" + config_file_;
+    const std::string config_file_path = package_share_directory + "/config/arms/" + config_file_;
     std::vector<std::string> errors;
   
     // Load the config

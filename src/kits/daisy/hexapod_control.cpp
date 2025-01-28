@@ -184,7 +184,7 @@ private:
 
   /////////////////// Initialize hexapod ///////////////////
   bool setupHexapod() {
-    std::string resource_path = ament_index_cpp::get_package_share_directory("hebi_description") + "/config/gains/hexapod/";
+    std::string resource_path = ament_index_cpp::get_package_share_directory("hebi_description") + "/config/daisy/gains/";
 
     hebi::HexapodErrors hex_errors;
     hebi::HexapodParameters params;

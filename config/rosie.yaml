@@ -2,7 +2,7 @@ arm/:
   arm_node:
     ros__parameters:
       config_package: "hebi_description"
-      config_file: "config/A-2085-06.cfg.yaml"
+      config_file: "config/arms/A-2085-06.cfg.yaml"
 
 omni_base_node:
   ros__parameters:

@@ -1,3 +1,3 @@
 treaded_base_node:
   gains_package: "hebi_description"
-  gains_file: "config/gains/r_tready_gains.xml"
+  gains_file: "config/tready/gains/r_tready_gains.xml"
