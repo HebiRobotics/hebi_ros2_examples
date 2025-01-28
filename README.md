@@ -440,12 +440,12 @@ You can use the same launch file `test_joint_trajectory_controller.launch.py` to
 
 ## MoveIt
 
-To use MoveIt with HEBI Arm, you need the ROS 2 control repositories and also the following:
+To use MoveIt with an HEBI Arm, you will need SRDF and other configuration files that MoveIt requires along with the ROS 2 control repositories mentioned above. These files for the standard HEBI kits are provided and can be downloaded using the following command:
 ```
 git clone -b ros2 https://github.com/HebiRobotics/hebi_moveit_configs.git
 ```
 
-Additionally, you will need to create a MoveIt configuration package for your arm. The steps to do so are given below.
+However, if you have a custom setup, you will need to create a MoveIt configuration package for your arm using the MoveIt Setup Assistant.
 
 ### Create MoveIt Configuration Package
 
@@ -502,77 +502,6 @@ Click on the `Configuration Files` tab, and select the desired output directory.
 
 Finally, click on `Exit Setup Assistant` button to exit the MoveIt Setup Assistant.
 
-To enable the MoveIt to access the HEBI Hardware Interface, you will need to make the following changes in the `<your_robot_name>_moveit_config` package.
-
-### config/<your_robot_name>.ros2_control.xacro
-
-After the line `
-<xacro:property name="initial_positions" value="${load_yaml(initial_positions_file)['initial_positions']}"/>
-`, add the following:
-```
-<xacro:property name="families" value="${load_yaml(initial_positions_file)['families']}"/>
-<xacro:property name="names" value="${load_yaml(initial_positions_file)['names']}"/>
-<xacro:property name="hrdf_pkg" value="${load_yaml(initial_positions_file)['hrdf_pkg']}"/>
-<xacro:property name="hrdf_file" value="${load_yaml(initial_positions_file)['hrdf_file']}"/>
-<xacro:property name="gains_pkg" value="${load_yaml(initial_positions_file)['gains_pkg']}"/>
-<xacro:property name="gains_file" value="${load_yaml(initial_positions_file)['gains_file']}"/>
-<xacro:property name="use_mock_hardware" value="${load_yaml(initial_positions_file)['use_mock_hardware']}"/>
-<xacro:property name="use_gazebo" value="${load_yaml(initial_positions_file)['use_gazebo']}"/>
-```
-
-Replace the `<hardware>` tag with the following:
-```
-<hardware>
-  <xacro:if value="${use_mock_hardware}">
-    <plugin>mock_components/GenericSystem</plugin>
-  </xacro:if>
-  <xacro:if value="${use_gazebo}">
-    <plugin>gazebo_ros2_control/GazeboSystem</plugin>
-  </xacro:if>
-  <xacro:unless value="${use_mock_hardware or use_gazebo}">
-    <!-- Parameters to initialize the Components -->
-    <param name="families">${families}</param>
-    <param name="names">${names}</param>
-    <param name="hrdf_pkg">${hrdf_pkg}</param>
-    <param name="hrdf_file">${hrdf_file}</param>
-    <param name="gains_pkg">${gains_pkg}</param>
-    <param name="gains_file">${gains_file}</param>
-    <plugin>hebi_hardware/HEBIHardwareInterface</plugin>
-  </xacro:unless>
-</hardware>
-```
-
-After the `<ros2_control>` tag, add the following:
-```
-<!-- Gazebo Classic plugins -->
-<xacro:if value="${use_gazebo}">
-  <gazebo>
-    <plugin filename="libgazebo_ros2_control.so" name="gazebo_ros2_control">
-      <parameters>$(find hebi_a-2085-06)/config/ros2_controllers.yaml</parameters>
-    </plugin>
-  </gazebo>
-</xacro:if>
-```
-
-The final file for A-2085-05 looks like this: <link_to_github_file>
-
-### config/initial_positions.yaml
-
-At the end of the file, add the following:
-```
-families: "<families_as_string_separated_by_semicolon>"
-
-names: "<names_as_string_separated_by_semicolon>"
-
-hrdf_pkg: "hebi_description"
-hrdf_file: "config/hrdf/<your_robot_name>.hrdf"
-gains_pkg: "hebi_description"
-gains_file: "config/gains/<your_robot_name>.xml"
-
-use_mock_hardware: true
-use_gazebo: false
-```
-
 To test the MoveIt configuration, run the following command:
 ```
 ros2 launch <your_robot_name>_moveit_config demo.launch.py
@@ -585,5 +514,30 @@ If the launch is successful, a RViz window opens up with the arm and a GUI to co
 
 To check if the MoveIt is able to plan and execute the trajectories, click on the `Planning` tab on the left sidebar, and choose `home` as the GoalState. Click on `Plan and Execute` button. This will plan and execute the trajectory to the `home` position, and you should see the arm move to the `home` position.
 
-To test the MoveIt configuration with the hardware, change the `use_mock_hardware` to `false` in the `initial_positions.yaml` file, and relaunch the `demo.launch.py` file. This will launch the MoveIt with the hardware interface. Now, you can plan and execute the trajectories with the hardware.
-**NOTE:** Do not forget to build your workspace and source your setup before relaunching.
+### MoveIt on the Hardware / Gazebo
+
+The URDF files in the MoveIt config directory does not have access to HEBI Hardware plugin or Gazebo plugins which we defined while setting up ROS2 control URDF files.
+
+Modifying the URDF, SRDF, and launch files can prove to be difficult and hence, we have provided `move_group.launch.py` in the `hebi_bringup` package.
+
+This launch file is supposed to be used in parallel with `bringup_arm` launch files, either directly on the hardware or on Gazebo.
+
+For example, either run
+```
+ros2 launch hebi_bringup bringup_arm.launch.py hebi_arm:=A-2085-05 use_mock_hardware:=false use_rviz:=false
+```
+or
+```
+ros2 launch hebi_bringup bringup_arm_gazebo_classic.launch.py hebi_arm:=A-2085-05 use_rviz:=false
+```
+or
+```
+ros2 launch hebi_bringup bringup_arm_gazebo.launch.py hebi_arm:=A-2085-05 use_rviz:=false
+```
+
+Then run
+```
+ros2 launch hebi_bringup move_group.launch.py hebi_arm:=A-2085-05
+```
+
+We set `use_rviz` as false in the first launch file to prevent duplicate RViz windows. Once you run the `move_group` launch command, you should see an RViz window with MoveIt loaded.
