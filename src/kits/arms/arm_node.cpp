@@ -81,7 +81,7 @@ public:
     cartesian_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("cartesian_trajectory", 50, std::bind(&ArmNode::cartesianWaypointsCallback, this, std::placeholders::_1));
 
     // Publishers
-    arm_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("joint_state", 50);
+    arm_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("joint_states", 50);
     center_of_mass_publisher_ = this->create_publisher<geometry_msgs::msg::Inertia>("inertia", 50);
     end_effector_pose_publisher_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("ee_pose", 50);
 

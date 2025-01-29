@@ -104,7 +104,9 @@ plugins:
     offset: [0, -7, 0, 0, 0]
 
 ```
-**NOTE:** `names` and `families` of your modules can be found and changed using Scope.
+**NOTE:**
+- `names` and `families` of your modules can be found and changed using Scope.
+- You can add `home_position` to `user_data` field for homing the arm on startup.
 
 The `arm_node` takes in the following parameters:
 ```
@@ -118,7 +120,7 @@ arm_node:
 The parameters are defined as follows -
 - `config_package`: ROS package where the config file is stored
 - `config_file`: Relative path of the config file from the config_package
-- `prefix`: Namespace for the topics and prefix for the joint names that will be published in the /joint_state topic
+- `prefix`: Namespace for the topics and prefix for the joint names that will be published in the /joint_states topic
 
 By default, the `arm.launch.py` launch file sets the `config package` parameter to the `hebi_description` package and the config file to `<your_robot_name>.cfg.yaml` file. Hence, it is recommended to name using these conventions or set the parameters while launching.
 

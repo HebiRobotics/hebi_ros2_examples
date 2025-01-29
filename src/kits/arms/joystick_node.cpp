@@ -46,7 +46,7 @@ public:
     joy_subscriber_ = this->create_subscription<sensor_msgs::msg::Joy>("joy", 10, std::bind(&JoystickNode::joy_callback, this, std::placeholders::_1));
 
     // Joint state subscriber used to determine number of joints
-    joint_state_subscriber_ = this->create_subscription<sensor_msgs::msg::JointState>(prefix_ + "/joint_state", 10, std::bind(&JoystickNode::get_num_joints, this, std::placeholders::_1));
+    joint_state_subscriber_ = this->create_subscription<sensor_msgs::msg::JointState>(prefix_ + "/joint_states", 10, std::bind(&JoystickNode::get_num_joints, this, std::placeholders::_1));
 
     // Home Service Client
     home_client_ = this->create_client<std_srvs::srv::Empty>("home");
