@@ -100,24 +100,12 @@ public:
 
     timer_ = this->create_wall_timer(std::chrono::milliseconds(5), std::bind(&ArmNode::publishState, this));
 
-    // Go to home position
-    if (home_position_available_) {
-      try {
-        arm_->update();
-        arm_->setGoal(arm::Goal::createFromPosition(3.0, home_position_));
-      }
-      catch (const std::runtime_error& e) {
-        RCLCPP_ERROR(this->get_logger(), "Could not go to home position: %s", e.what());
-        return;
-      }
-    }
+    // Go to home position if available
+    if (home_position_available_)
+      std::thread{std::bind(&ArmNode::homeArm, this)}.detach();
+    else stopArm();   // Essentially we are just setting the arm to stay at current position
 
-    // Raise homed flag only after it reaches the home position
-    while (!arm_->atGoal() && rclcpp::ok()) {
-      update();
-    }  
     arm_initialized_ = true;
-    RCLCPP_INFO(this->get_logger(), "Reached home position");
   }
 
   void update() {
@@ -939,6 +927,7 @@ private:
 
     // Create arm from config
     arm_ = arm::Arm::create(*arm_config);
+    arm_->update();
 
     // Terminate if arm not found
     if (!arm_) {
