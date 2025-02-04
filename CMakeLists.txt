@@ -116,21 +116,21 @@ ament_target_dependencies(diff_drive_node
   tf2_ros
 )
 
-add_executable(hexapod_control src/kits/daisy/hexapod_control.cpp
-  src/kits/daisy/util/leg.cpp
-  src/kits/daisy/util/hexapod.cpp
-  src/kits/daisy/util/step.cpp
-  src/kits/daisy/util/hexapod_parameters.cpp
-  src/kits/daisy/xml_util/pugixml.cpp
-  src/kits/daisy/xml_util/xml_helpers.cpp
-)
-ament_target_dependencies(hexapod_control
-  rclcpp
-  ament_index_cpp
-  geometry_msgs
-  hebi_cpp_api
-  sensor_msgs
-)
+# add_executable(hexapod_control src/kits/daisy/hexapod_control.cpp
+#   src/kits/daisy/util/leg.cpp
+#   src/kits/daisy/util/hexapod.cpp
+#   src/kits/daisy/util/step.cpp
+#   src/kits/daisy/util/hexapod_parameters.cpp
+#   src/kits/daisy/xml_util/pugixml.cpp
+#   src/kits/daisy/xml_util/xml_helpers.cpp
+# )
+# ament_target_dependencies(hexapod_control
+#   rclcpp
+#   ament_index_cpp
+#   geometry_msgs
+#   hebi_cpp_api
+#   sensor_msgs
+# )
 
 add_executable(treaded_base_node src/kits/tready/treaded_base_node.cpp src/kits/tready/treaded_base.cpp)
 ament_target_dependencies(treaded_base_node
