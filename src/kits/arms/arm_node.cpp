@@ -956,15 +956,15 @@ private:
     }
 
     // Check if IK seed is provided
-    if (arm_config->getUserData().hasFloatList("ik_seed")) {
+    if (arm_config->getUserData().hasFloatList("ik_seed_pos")) {
 
       // Check if ik_seed has the right length
-      if (arm_config->getUserData().getFloatList("ik_seed").size() != num_joints_) {
+      if (arm_config->getUserData().getFloatList("ik_seed_pos").size() != num_joints_) {
         RCLCPP_ERROR(this->get_logger(), "HEBI config \"user_data\"'s \"ik_seed\" field must have the same number of elements as degrees of freedom! Ignoring...");
         use_ik_seed_ = false;
       }
       else {
-        ik_seed_ = Eigen::Map<Eigen::VectorXd>(arm_config->getUserData().getFloatList("ik_seed").data(), arm_config->getUserData().getFloatList("ik_seed").size());
+        ik_seed_ = Eigen::Map<Eigen::VectorXd>(arm_config->getUserData().getFloatList("ik_seed_pos").data(), arm_config->getUserData().getFloatList("ik_seed_pos").size());
         RCLCPP_INFO(this->get_logger(), "Found and successfully read 'ik_seed' parameter");
       }
     } else {
