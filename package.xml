@@ -26,6 +26,7 @@
   <depend>rclcpp</depend>
   <depend>rclpy</depend>
   <depend>rclcpp_action</depend>
+  <depend>ament_index_cpp</depend>
   <depend>hebi_cpp_api</depend>
   <depend>hebi_msgs</depend>
   <depend>tf2</depend>

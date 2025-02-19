@@ -36,7 +36,7 @@ def generate_launch_description():
   arm_node = IncludeLaunchDescription(
     PythonLaunchDescriptionSource(
       PathJoinSubstitution(
-        [FindPackageShare('hebi_ros2_examples'), 'launch', 'arm_node.launch.py']
+        [FindPackageShare('hebi_ros2_examples'), 'launch', 'arm.launch.py']
       )
     ),
     launch_arguments={

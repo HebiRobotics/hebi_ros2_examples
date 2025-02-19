@@ -184,7 +184,7 @@ private:
     // Create base and plan initial trajectory
     std::string error_out;
 
-    std::string gains_file = ament_index_cpp::get_package_share_directory("hebi_description") + "/config/gains/diff_drive_gains.xml";
+    std::string gains_file = ament_index_cpp::get_package_share_directory("hebi_description") + "/config/bases/gains/diff_drive_gains.xml";
 
     std::string families_str = "", names_str = "";
     for (auto f : families) families_str += f + ", ";

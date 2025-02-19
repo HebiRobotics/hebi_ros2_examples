@@ -4,6 +4,7 @@
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
 
+#include <sensor_msgs/msg/joint_state.hpp>
 #include "hebi_cpp_api/lookup.hpp"
 #include "hebi_cpp_api/group.hpp"
 #include "hebi_cpp_api/group_command.hpp"
@@ -12,7 +13,7 @@
 
 #include <hebi_msgs/action/base_motion.hpp>
 
-#include "hebi_ros2_examples/mecanum_base.hpp"
+#include "hebi_ros2_examples/omni_base.hpp"
 #include "hebi_ros2_examples/odom_publisher.hpp"
 
 
@@ -24,13 +25,13 @@ public:
   using BaseMotion = hebi_msgs::action::BaseMotion;
   using GoalHandleBaseMotion = rclcpp_action::ServerGoalHandle<BaseMotion>;
 
-  std::unique_ptr<hebi::MecanumBase> base_;
+  std::unique_ptr<hebi::OmniBase> base_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr set_velocity_subscriber_;
 
   // Topics for publishing calculated odometry
   std::unique_ptr<hebi::ros::OdomPublisher> odom_publisher;
 
-  BaseNode() : Node("mecanum_base_node") {
+  BaseNode() : Node("omni_base_node") {
 
     this->declare_parameter("names", rclcpp::PARAMETER_STRING_ARRAY);
     this->declare_parameter("families", rclcpp::PARAMETER_STRING_ARRAY);
@@ -43,6 +44,9 @@ public:
     Color c;
     base_->resetStart(c);
 
+    // Publish Joint State
+    state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("omni_base/joint_states", 100);
+
     // start the action server
     this->action_server_ = rclcpp_action::create_server<BaseMotion>(
       this,
@@ -54,6 +58,33 @@ public:
     // Explicitly set the target velocity
     set_velocity_subscriber_ = this->create_subscription<geometry_msgs::msg::Twist>("cmd_vel", 1, std::bind(&hebi::ros::BaseNode::updateVelocity, this, std::placeholders::_1));
   }
+
+  void publishState() {
+    // Publish Joint State
+    auto& fdbk = base_->getLastFeedback();
+
+    auto pos = fdbk.getPosition();
+    auto vel = fdbk.getVelocity();
+    auto eff = fdbk.getEffort();
+
+    state_msg_.position.resize(pos.size());
+    state_msg_.velocity.resize(vel.size());
+    state_msg_.effort.resize(eff.size());
+    state_msg_.header.stamp = this->now();
+
+    Eigen::VectorXd::Map(&state_msg_.position[0], pos.size()) = pos;
+    Eigen::VectorXd::Map(&state_msg_.velocity[0], vel.size()) = vel;
+    Eigen::VectorXd::Map(&state_msg_.effort[0], eff.size()) = eff;
+
+    state_pub_->publish(state_msg_);
+  }
+
+private:
+
+  rclcpp_action::Server<hebi_msgs::action::BaseMotion>::SharedPtr action_server_;
+
+  sensor_msgs::msg::JointState state_msg_;
+  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr state_pub_;
 
   //////////////////////// ACTION HANDLER FUNCTIONS ////////////////////////
 
@@ -146,11 +177,6 @@ public:
       target_vel);
   }
 
-
-private:
-
-  rclcpp_action::Server<hebi_msgs::action::BaseMotion>::SharedPtr action_server_;
-
   /////////////////// Initialize base ///////////////////
   bool initializeBase() {
     
@@ -160,8 +186,8 @@ private:
       this->get_parameter("families", families);
       RCLCPP_INFO(this->get_logger(), "Found and successfully read 'families' parameter");
     } else {
-      RCLCPP_WARN(this->get_logger(), "Could not find/read 'families' parameter; defaulting to 'mecanumBase'");
-      families = {"mecanumBase"};
+      RCLCPP_WARN(this->get_logger(), "Could not find/read 'families' parameter; defaulting to 'OmniDrive'");
+      families = {"OmniDrive"};
     }
 
     std::vector<std::string> names;
@@ -169,8 +195,8 @@ private:
       this->get_parameter("names", names);
       RCLCPP_INFO(this->get_logger(), "Found and successfully read 'names' parameter");
     } else {
-      RCLCPP_WARN(this->get_logger(), "Could not find/read 'names' parameter; defaulting to 'frontLeft', 'backLeft', 'frontRight', and 'backRight'");
-      names = {"frontLeft", "backLeft", "frontRight", "backRight"};
+      RCLCPP_WARN(this->get_logger(), "Could not find/read 'names' parameter; defaulting to 'wheel1', 'wheel2', and 'wheel3'");
+      names = {"wheel1", "wheel2", "wheel3"};
     }
 
     bool publish_odom{};
@@ -189,7 +215,7 @@ private:
     // Create base and plan initial trajectory
     std::string error_out;
 
-    std::string gains_file = ament_index_cpp::get_package_share_directory("hebi_description") + "/config/gains/mecanum_base_gains.xml";
+    std::string gains_file = ament_index_cpp::get_package_share_directory("hebi_description") + "/config/bases/gains/omni_base_gains.xml";
 
     std::string families_str = "", names_str = "";
     for (auto f : families) families_str += f + ", ";
@@ -204,7 +230,7 @@ private:
     RCLCPP_INFO(this->get_logger(), "Publish odom: %s", publish_odom ? "true" : "false");
 
     for (int num_tries = 0; num_tries < 3; num_tries++) {
-      base_ = hebi::MecanumBase::create(
+      base_ = hebi::OmniBase::create(
         families, // Famil(ies)
         names, // Names
         gains_file, // Gains file
@@ -228,6 +254,14 @@ private:
     } else  {
       RCLCPP_INFO(this->get_logger(), "Base initialized!");
     }
+
+    // Make a list of family/actuator formatted names for the JointState publisher
+    std::vector<std::string> full_names;
+    for (size_t idx=0; idx<names.size(); ++idx) {
+      full_names.push_back(names.at(idx));
+    }
+    // TODO: Figure out a way to get link names from the arm, so it doesn't need to be input separately
+    state_msg_.name = full_names;
 
     return true;
   }
@@ -258,11 +292,13 @@ int main(int argc, char ** argv) {
       if (node->odom_publisher)
         node->odom_publisher->send(t, node->base_->getGlobalPose(), node->base_->getGlobalVelocity());
 
+      node->publishState();
+
       // Call any pending callbacks (note -- this may update our planned motion)
       rclcpp::spin_some(node);
     }
   } catch (const std::runtime_error& e) {
-    RCLCPP_ERROR(rclcpp::get_logger("mecanum_base_node"), "Caught runtime error: %s", e.what());
+    RCLCPP_ERROR(rclcpp::get_logger("omni_base_node"), "Caught runtime error: %s", e.what());
     return -1;
   }
 

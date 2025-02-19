@@ -2,4 +2,4 @@
 name: "gripperSpool"
 family: "Arm"
 gains_package: "hebi_description"
-gains_file: "config/gains/gripper_spool_gains.xml"
+gains_file: "config/arms/gains/gripper_spool_gains.xml"
