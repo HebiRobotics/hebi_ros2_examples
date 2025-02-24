@@ -74,36 +74,6 @@ ament_target_dependencies(joystick_node
   std_srvs
 )
 
-add_executable(magnet_arm src/kits/arm/magnet_arm.cpp)
-ament_target_dependencies(magnet_arm
-  rclcpp
-  rclcpp_action
-  trajectory_msgs
-  hebi_msgs
-  geometry_msgs
-  hebi_cpp_api
-  control_msgs
-  tf2
-  tf2_ros
-  tf2_geometry_msgs
-  visualization_msgs
-  sensor_msgs
-)
-
-add_executable(effortviz_arm src/kits/arm/effortviz_arm.cpp)
-ament_target_dependencies(effortviz_arm
-  rclcpp
-  rclcpp_action
-  hebi_msgs
-  geometry_msgs
-  sensor_msgs
-  hebi_cpp_api
-  tf2
-  tf2_ros
-  tf2_geometry_msgs
-  visualization_msgs
-)
-
 add_executable(omni_base_node src/kits/bases/omni_base_node.cpp src/kits/bases/util/omni_base.cpp src/kits/bases/util/odom_publisher.cpp)
 ament_target_dependencies(omni_base_node
   rclcpp
@@ -185,8 +155,6 @@ install(TARGETS
   # hexapod_control
   treaded_base_node
   joystick_node
-  magnet_arm
-  effortviz_arm
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS
