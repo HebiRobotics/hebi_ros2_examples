@@ -122,11 +122,13 @@ The HEBI C++ API is wrapped in ROS 2 within the `arm_node` (`src/kits/arms/arm_n
 - */cartesian_trajectory [trajectory_msgs/msg/JointTrajectory]*: Command a trajectory for the end effector in cartesian space
 - */joint_jog [control_msgs/msg/JointJog]*: Command jog in joint angles
 - */joint_trajectory [trajectory_msgs/msg/JointTrajectory]*: Command a trajectory in joint angles
+- */cmd_ee_wrench [geometry_msgs/msg/Wrench]*: Command end effector wrench (force and torque) in the base frame
 
 **Publishers**
 - */ee_pose [geometry_msgs/msg/PoseStamped]*: End effector pose in SE3 space
 - */joint_states [sensor_msgs/msg/JointState]*: Joint angles of the arm
 - */inertia [geometry_msgs/msg/Inertia]*: Inertia of the arm
+- */ee_wrench [geometry_msgs/msg/WrenchStamped]*: End effector wrench (force and torque) feedback in the base frame
 
 **Action Servers**
 - */arm_motion [hebi_msgs/action/ArmMotion]*: Command an arm trajectory in either joint space or SE3 space
