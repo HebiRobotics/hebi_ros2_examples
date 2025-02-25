@@ -1,6 +1,7 @@
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, SetLaunchConfiguration
+from launch.actions import DeclareLaunchArgument, RegisterEventHandler, ExecuteProcess
 from launch.substitutions import Command, FindExecutable, LaunchConfiguration, PathJoinSubstitution, PythonExpression
+from launch.event_handlers import OnProcessExit
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 from launch.conditions import IfCondition, LaunchConfigurationEquals
@@ -49,15 +50,8 @@ def generate_launch_description():
     declared_arguments.append(
         DeclareLaunchArgument(
             "config_file",
-            default_value="None",  # Default set later
+            default_value=PythonExpression(['"', LaunchConfiguration("hebi_arm"), '.cfg.yaml"']),
             description="Config file for the arm of type `.cfg.yaml`",
-        )
-    )
-    declared_arguments.append(
-        SetLaunchConfiguration(
-            name="config_file",
-            value=PythonExpression(['"', LaunchConfiguration("hebi_arm"), '.cfg.yaml"']),
-            condition=LaunchConfigurationEquals("config_file", "None"),
         )
     )
 
@@ -68,20 +62,28 @@ def generate_launch_description():
     config_file = LaunchConfiguration("config_file")
     use_rviz = LaunchConfiguration("use_rviz")
 
+    # Generate URDF from config file
+    urdf_output_dir = "/tmp/hebi"
+    urdf_output_file_name = "hebi_arm.urdf.xacro"
+    urdf_generator = ExecuteProcess(
+        cmd=[
+            'python3',
+            PathJoinSubstitution([FindPackageShare("hebi_description"), "scripts", "urdf_generator.py"]),
+            PathJoinSubstitution([FindPackageShare(config_package), "config", "arms", config_file]),
+            '--outputdir', urdf_output_dir,
+            '--output-file-name', urdf_output_file_name
+        ],
+        output='screen'
+    )
+
     # Get URDF via xacro
     robot_description_content = Command(
         [
             PathJoinSubstitution([FindExecutable(name="xacro")]),
             " ",
-            PathJoinSubstitution(
-                [
-                    FindPackageShare(description_package),
-                    "urdf",
-                    "kits",
-                    PythonExpression(['"', hebi_arm, '.urdf.xacro"']),
-                ]
-            ),
-            " " "prefix:=",
+            PathJoinSubstitution([urdf_output_dir, urdf_output_file_name]),
+            " ",
+            "prefix:=",
             prefix,
         ]
     )
@@ -120,11 +122,17 @@ def generate_launch_description():
         condition=IfCondition(use_rviz),
     )
 
+    launch_after_urdf_generator = RegisterEventHandler(
+        event_handler=OnProcessExit(
+            target_action=urdf_generator,
+            on_exit=[robot_state_publisher_node, arm_node, rviz_node],
+        )
+    )
+
     return LaunchDescription(
         declared_arguments
         + [
-            robot_state_publisher_node,
-            arm_node,
-            rviz_node,
+            urdf_generator,
+            launch_after_urdf_generator,
         ]
     )

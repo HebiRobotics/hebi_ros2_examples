@@ -45,15 +45,18 @@ source install/setup.bash
 
 For standalone control using the HEBI ROS 2 API, only an HRDF (HEBI Robot Description Format) file is required. See the [HEBI Documentation](https://docs.hebi.us/tools.html#robot-description-format) for a detailed explanation of the HRDF format.
 
-However, for visualization using RViz (even when using the standalone API), controlling using ROS 2 control, MoveIt, or simulating in simulators such as Gazebo, a URDF file is required.
+However, for controlling using ROS 2 control, integrating with MoveIt, or simulating in environments such as Gazebo, a URDF file is necessary.
 
-The HRDFs and URDFs for the standard HEBI arm kits are provided in the `hebi_description` package.
+The `hebi_description` package provides both HRDFs and URDFs for the standard HEBI arm kits.
 
 ### Non-standard Kits
 
 If you are using a non-standard HEBI kit:
-1. **HRDF Creation:** Creating an HRDF file is fairly simple. Examine the standard HEBI kit HRDFs in the `config/arms/hrdf` directory of the `hebi_description` package for examples.
-2. **URDF Generation:** A script is provided in the `hebi_description` repository to convert HRDF to URDF. Refer to the documentation provided in `hebi_description` for usage instructions.
+1. **HRDF Creation:** Creating an HRDF file is relatively straightforward. Examine the standard HEBI kit HRDFs in the `config/arms/hrdf` directory of the `hebi_description` package for reference.
+2. **URDF Generation:** A conversion script is available in the `hebi_description` repository to convert HRDF to URDF. Refer to the documentation provided in `hebi_description` for usage instructions.
+
+### Important Note
+While only HRDF is necessary when using the standalone ROS API, RViz visualization requires a URDF. However, the launch file automatically converts the HRDF into URDF using the provided script, eliminating the need for manual URDF generation.
 
 ## Standalone HEBI ROS 2 API
 
