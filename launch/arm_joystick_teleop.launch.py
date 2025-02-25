@@ -1,10 +1,9 @@
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, SetLaunchConfiguration, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
-from launch.conditions import LaunchConfigurationEquals
 
 
 def generate_launch_description():
@@ -27,7 +26,7 @@ def generate_launch_description():
     declared_arguments.append(
         DeclareLaunchArgument(
             "use_rviz",
-            default_value="false",
+            default_value="true",
             description="Whether to start RViz.",
         )
     )
@@ -50,15 +49,8 @@ def generate_launch_description():
     declared_arguments.append(
         DeclareLaunchArgument(
             "config_file",
-            default_value="None",  # Default set later
+            default_value=PythonExpression(['"', LaunchConfiguration("hebi_arm"), '.cfg.yaml"']),
             description="Config file for the arm of type `.cfg.yaml`",
-        )
-    )
-    declared_arguments.append(
-        SetLaunchConfiguration(
-            name="config_file",
-            value=PythonExpression(['"', LaunchConfiguration("hebi_arm"), '.cfg.yaml"']),
-            condition=LaunchConfigurationEquals("config_file", "None"),
         )
     )
 
