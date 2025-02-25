@@ -90,7 +90,7 @@ public:
     center_of_mass_publisher_ = this->create_publisher<geometry_msgs::msg::Inertia>("inertia", 10);
     end_effector_pose_publisher_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("ee_pose", 10);
     if (num_joints_ == 6) {
-      ee_wrench_publisher_ = this->create_publisher<geometry_msgs::msg::WrenchStamped>("ee_wrench_raw", 10);
+      ee_wrench_publisher_ = this->create_publisher<geometry_msgs::msg::WrenchStamped>("ee_wrench", 10);
     }
     else RCLCPP_WARN(this->get_logger(), "Cannot publish wrench data for this arm, as it does not have 6 joints");
 
