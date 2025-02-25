@@ -7,6 +7,8 @@
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <geometry_msgs/msg/inertia.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/wrench.hpp>
+#include <geometry_msgs/msg/wrench_stamped.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include <hebi_msgs/action/arm_motion.hpp>
@@ -74,16 +76,18 @@ public:
     compliant_mode_callback_handle_ = parameter_event_handler_->add_parameter_callback("compliant_mode", std::bind(&ArmNode::compliantModeCallback, this, std::placeholders::_1));
 
     // Subscribers
-    joint_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("joint_jog", 50, std::bind(&ArmNode::jointJogCallback, this, std::placeholders::_1));
-    cartesian_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("cartesian_jog", 50, std::bind(&ArmNode::cartesianJogCallback, this, std::placeholders::_1));
-    SE3_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("SE3_jog", 50, std::bind(&ArmNode::SE3JogCallback, this, std::placeholders::_1));
-    joint_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("joint_trajectory", 50, std::bind(&ArmNode::jointWaypointsCallback, this, std::placeholders::_1));
-    cartesian_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("cartesian_trajectory", 50, std::bind(&ArmNode::cartesianWaypointsCallback, this, std::placeholders::_1));
+    joint_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("joint_jog", 10, std::bind(&ArmNode::jointJogCallback, this, std::placeholders::_1));
+    cartesian_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("cartesian_jog", 10, std::bind(&ArmNode::cartesianJogCallback, this, std::placeholders::_1));
+    SE3_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("SE3_jog", 10, std::bind(&ArmNode::SE3JogCallback, this, std::placeholders::_1));
+    joint_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("joint_trajectory", 10, std::bind(&ArmNode::jointWaypointsCallback, this, std::placeholders::_1));
+    cartesian_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("cartesian_trajectory", 10, std::bind(&ArmNode::cartesianWaypointsCallback, this, std::placeholders::_1));
+    cmd_ee_wrench_subscriber_ = this->create_subscription<geometry_msgs::msg::Wrench>("cmd_ee_wrench", 10, std::bind(&ArmNode::wrenchCommandCallback, this, std::placeholders::_1));
 
     // Publishers
-    arm_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("joint_states", 50);
-    center_of_mass_publisher_ = this->create_publisher<geometry_msgs::msg::Inertia>("inertia", 50);
-    end_effector_pose_publisher_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("ee_pose", 50);
+    arm_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("joint_states", 10);
+    center_of_mass_publisher_ = this->create_publisher<geometry_msgs::msg::Inertia>("inertia", 10);
+    end_effector_pose_publisher_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("ee_pose", 10);
+    ee_wrench_publisher_ = this->create_publisher<geometry_msgs::msg::WrenchStamped>("ee_wrench", 10);
 
     // Services
     home_service_ = this->create_service<std_srvs::srv::Trigger>("home", std::bind(&ArmNode::homeCallback, this, std::placeholders::_1, std::placeholders::_2));
@@ -113,8 +117,13 @@ public:
     // (this also acts as a loop-rate limiter so no 'sleep' is needed)
     if (!arm_->update())
       RCLCPP_WARN(this->get_logger(), "Error Getting Feedback -- Check Connection");
-    else if (!arm_->send())
-      RCLCPP_WARN(this->get_logger(), "Error Sending Commands -- Check Connection");
+    else {
+      // Modify pending command here
+      arm_->pendingCommand().setEffort(arm_->pendingCommand().getEffort() + cmd_joint_effort_);
+      // Send command
+      if (!arm_->send())
+        RCLCPP_WARN(this->get_logger(), "Error Sending Commands -- Check Connection");
+    }
   }
 
 private:
@@ -129,8 +138,11 @@ private:
   bool is_homing_{false};
 
   bool compliant_mode_{false};
-  Eigen::VectorXd home_position_ = Eigen::VectorXd::Constant(6, 0.01); // Default values are close to zero to avoid singularity
+  Eigen::VectorXd home_position_{ Eigen::VectorXd::Constant(6, 0.01) }; // Default values are close to zero to avoid singularity
   bool home_position_available_{false};
+  
+  Eigen::VectorXd cmd_joint_effort_{ Eigen::VectorXd::Zero(6) };
+  
   int num_joints_;
 
   Eigen::VectorXd ik_seed_;
@@ -146,10 +158,12 @@ private:
   rclcpp::Subscription<control_msgs::msg::JointJog>::SharedPtr SE3_jog_subscriber_;
   rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr cartesian_waypoint_subscriber_;
   rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr joint_waypoint_subscriber_;
+  rclcpp::Subscription<geometry_msgs::msg::Wrench>::SharedPtr cmd_ee_wrench_subscriber_;
 
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr arm_state_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Inertia>::SharedPtr center_of_mass_publisher_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr end_effector_pose_publisher_;
+  rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr ee_wrench_publisher_;
 
   rclcpp_action::Server<hebi_msgs::action::ArmMotion>::SharedPtr action_server_;
 
@@ -700,20 +714,44 @@ private:
     updateSE3Waypoints(use_traj_times_, times, xyz_positions, &euler_angles, false);
   }
 
+  // Control the wrench at the end-effector
+  void wrenchCommandCallback(const geometry_msgs::msg::Wrench::SharedPtr wrench_msg)
+  {
+    if (!checkArmConditions("cmd_ee_wrench"))
+      return;
+
+    Eigen::VectorXd desired_ee_wrench(6);
+    desired_ee_wrench(0) = (*wrench_msg).force.x;
+    desired_ee_wrench(1) = (*wrench_msg).force.y;
+    desired_ee_wrench(2) = (*wrench_msg).force.z;
+    desired_ee_wrench(3) = (*wrench_msg).torque.x;
+    desired_ee_wrench(4) = (*wrench_msg).torque.y;
+    desired_ee_wrench(5) = (*wrench_msg).torque.z;
+
+    Eigen::MatrixXd ee_jacobian;
+    arm_->robotModel().getJacobianEndEffector(arm_->lastFeedback().getPosition(), ee_jacobian);
+
+    // Compute torques from wrench
+    cmd_joint_effort_ = ee_jacobian.transpose() * desired_ee_wrench;
+
+    // NOTE: Cannot set pending command here, as there is no assurance it will not get overwritten by arm_->update()
+  }
+
   /////////////////////////// UTILITY FUNCTIONS ///////////////////////////
 
   void publishState() {
     // Publish Joint State
-    auto& fdbk = arm_->lastFeedback();
+    const auto& fdbk = arm_->lastFeedback();
 
-    auto pos = fdbk.getPosition();
-    auto vel = fdbk.getVelocity();
-    auto eff = fdbk.getEffort();
+    const auto pos = fdbk.getPosition();
+    const auto vel = fdbk.getVelocity();
+    const auto eff = fdbk.getEffort();
 
     state_msg_.position.resize(pos.size());
     state_msg_.velocity.resize(vel.size());
     state_msg_.effort.resize(eff.size());
     state_msg_.header.stamp = this->now();
+    state_msg_.header.frame_id = "base_link";
 
     Eigen::VectorXd::Map(&state_msg_.position[0], pos.size()) = pos;
     Eigen::VectorXd::Map(&state_msg_.velocity[0], vel.size()) = vel;
@@ -728,6 +766,7 @@ private:
     Eigen::Quaterniond cur_orientation_quat(cur_orientation);
 
     geometry_msgs::msg::PoseStamped pose_msg;
+    pose_msg.header.frame_id = "base_link";
     pose_msg.header.stamp = this->now();
     pose_msg.pose.position.x = cur_pose[0];
     pose_msg.pose.position.y = cur_pose[1];
@@ -738,6 +777,26 @@ private:
     pose_msg.pose.orientation.w = cur_orientation_quat.w();
 
     end_effector_pose_publisher_->publish(pose_msg);
+
+    // Publish Raw End-Effector Wrench    
+    Eigen::MatrixXd ee_jacobian;
+    arm_->robotModel().getJacobianEndEffector(pos, ee_jacobian);
+    // Calculate pseudo-inverse of J^T
+    Eigen::MatrixXd ee_jacobian_t_pinv = ee_jacobian.transpose().completeOrthogonalDecomposition().pseudoInverse();
+    // Calculate wrench as (J^T)^-1 * joint effort
+    Eigen::VectorXd ee_wrench = ee_jacobian_t_pinv * eff;
+    
+    geometry_msgs::msg::WrenchStamped ee_wrench_msg;
+    ee_wrench_msg.header.stamp = this->now();
+    ee_wrench_msg.header.frame_id = "base_link";
+    ee_wrench_msg.wrench.force.x = ee_wrench(0);
+    ee_wrench_msg.wrench.force.y = ee_wrench(1);
+    ee_wrench_msg.wrench.force.z = ee_wrench(2);
+    ee_wrench_msg.wrench.torque.x = ee_wrench(3);
+    ee_wrench_msg.wrench.torque.y = ee_wrench(4);
+    ee_wrench_msg.wrench.torque.z = ee_wrench(5);
+    
+    ee_wrench_publisher_->publish(ee_wrench_msg);
 
     // Publish Center of Mass
     auto& model = arm_->robotModel();
