@@ -82,7 +82,7 @@ public:
     joint_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("joint_trajectory", 10, std::bind(&ArmNode::jointWaypointsCallback, this, std::placeholders::_1));
     cartesian_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("cartesian_trajectory", 10, std::bind(&ArmNode::cartesianWaypointsCallback, this, std::placeholders::_1));
     if (num_joints_ == 6) {
-      cmd_ee_wrench_subscriber_ = this->create_subscription<geometry_msgs::msg::Wrench>("cmd_ee_wrench", 10, std::bind(&ArmNode::WrenchCommandCallback, this, std::placeholders::_1));
+      cmd_ee_wrench_subscriber_ = this->create_subscription<geometry_msgs::msg::Wrench>("cmd_ee_wrench", 10, std::bind(&ArmNode::wrenchCommandCallback, this, std::placeholders::_1));
     }
 
     // Publishers
@@ -122,8 +122,13 @@ public:
     // (this also acts as a loop-rate limiter so no 'sleep' is needed)
     if (!arm_->update())
       RCLCPP_WARN(this->get_logger(), "Error Getting Feedback -- Check Connection");
-    else if (!arm_->send())
-      RCLCPP_WARN(this->get_logger(), "Error Sending Commands -- Check Connection");
+    else {
+      // Modify pending command here
+      arm_->pendingCommand().setEffort(arm_->pendingCommand().getEffort() + cmd_joint_effort_);
+      // Send command
+      if (!arm_->send())
+        RCLCPP_WARN(this->get_logger(), "Error Sending Commands -- Check Connection");
+    }
   }
 
 private:
@@ -138,8 +143,11 @@ private:
   bool is_homing_{false};
 
   bool compliant_mode_{false};
-  Eigen::VectorXd home_position_ = Eigen::VectorXd::Constant(6, 0.01); // Default values are close to zero to avoid singularity
+  Eigen::VectorXd home_position_{ Eigen::VectorXd::Constant(6, 0.01) }; // Default values are close to zero to avoid singularity
   bool home_position_available_{false};
+  
+  Eigen::VectorXd cmd_joint_effort_{ Eigen::VectorXd::Zero(6) };
+  
   int num_joints_;
 
   Eigen::VectorXd ik_seed_;
@@ -712,7 +720,7 @@ private:
   }
 
   // Control the wrench at the end-effector
-  void WrenchCommandCallback(const geometry_msgs::msg::Wrench::SharedPtr wrench_msg)
+  void wrenchCommandCallback(const geometry_msgs::msg::Wrench::SharedPtr wrench_msg)
   {
     if (!checkArmConditions("cmd_ee_wrench"))
       return;
@@ -735,9 +743,9 @@ private:
     arm_->robotModel().getJacobianEndEffector(arm_->lastFeedback().getPosition(), ee_jacobian);
 
     // Compute torques from wrench
-    Eigen::VectorXd desired_efforts = ee_jacobian.transpose() * desired_ee_wrench;
+    cmd_joint_effort_ = ee_jacobian.transpose() * desired_ee_wrench;
 
-    arm_->pendingCommand().setEffort(arm_->pendingCommand().getEffort() + desired_efforts);
+    // NOTE: Cannot set pending command here, as there is no assurance it will not get overwritten by arm_->update()
   }
 
   /////////////////////////// UTILITY FUNCTIONS ///////////////////////////
