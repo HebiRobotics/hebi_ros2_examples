@@ -81,18 +81,13 @@ public:
     SE3_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("SE3_jog", 10, std::bind(&ArmNode::SE3JogCallback, this, std::placeholders::_1));
     joint_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("joint_trajectory", 10, std::bind(&ArmNode::jointWaypointsCallback, this, std::placeholders::_1));
     cartesian_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("cartesian_trajectory", 10, std::bind(&ArmNode::cartesianWaypointsCallback, this, std::placeholders::_1));
-    if (num_joints_ == 6) {
-      cmd_ee_wrench_subscriber_ = this->create_subscription<geometry_msgs::msg::Wrench>("cmd_ee_wrench", 10, std::bind(&ArmNode::wrenchCommandCallback, this, std::placeholders::_1));
-    }
+    cmd_ee_wrench_subscriber_ = this->create_subscription<geometry_msgs::msg::Wrench>("cmd_ee_wrench", 10, std::bind(&ArmNode::wrenchCommandCallback, this, std::placeholders::_1));
 
     // Publishers
     arm_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("joint_states", 10);
     center_of_mass_publisher_ = this->create_publisher<geometry_msgs::msg::Inertia>("inertia", 10);
     end_effector_pose_publisher_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("ee_pose", 10);
-    if (num_joints_ == 6) {
-      ee_wrench_publisher_ = this->create_publisher<geometry_msgs::msg::WrenchStamped>("ee_wrench", 10);
-    }
-    else RCLCPP_WARN(this->get_logger(), "Cannot publish wrench data for this arm, as it does not have 6 joints");
+    ee_wrench_publisher_ = this->create_publisher<geometry_msgs::msg::WrenchStamped>("ee_wrench", 10);
 
     // Services
     home_service_ = this->create_service<std_srvs::srv::Trigger>("home", std::bind(&ArmNode::homeCallback, this, std::placeholders::_1, std::placeholders::_2));
@@ -724,12 +719,6 @@ private:
   {
     if (!checkArmConditions("cmd_ee_wrench"))
       return;
-    
-    if (num_joints_ != 6)
-    {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Wrench control only available for 6-DoF arms");
-      return;
-    }
 
     Eigen::VectorXd desired_ee_wrench(6);
     desired_ee_wrench(0) = (*wrench_msg).force.x;
@@ -789,33 +778,25 @@ private:
 
     end_effector_pose_publisher_->publish(pose_msg);
 
-    // Publish Raw End-Effector Wrench and Gravity Compensated End-Effector Wrench
+    // Publish Raw End-Effector Wrench    
+    Eigen::MatrixXd ee_jacobian;
+    arm_->robotModel().getJacobianEndEffector(pos, ee_jacobian);
+    // Calculate pseudo-inverse of J^T
+    Eigen::MatrixXd ee_jacobian_t_pinv = ee_jacobian.transpose().completeOrthogonalDecomposition().pseudoInverse();
+    // Calculate wrench as (J^T)^-1 * joint effort
+    Eigen::VectorXd ee_wrench = ee_jacobian_t_pinv * eff;
+    
     geometry_msgs::msg::WrenchStamped ee_wrench_msg;
     ee_wrench_msg.header.stamp = this->now();
     ee_wrench_msg.header.frame_id = "base_link";
+    ee_wrench_msg.wrench.force.x = ee_wrench(0);
+    ee_wrench_msg.wrench.force.y = ee_wrench(1);
+    ee_wrench_msg.wrench.force.z = ee_wrench(2);
+    ee_wrench_msg.wrench.torque.x = ee_wrench(3);
+    ee_wrench_msg.wrench.torque.y = ee_wrench(4);
+    ee_wrench_msg.wrench.torque.z = ee_wrench(5);
     
-    Eigen::MatrixXd ee_jacobian;
-    arm_->robotModel().getJacobianEndEffector(pos, ee_jacobian);
-    
-    if (num_joints_ == 6)
-    {
-      if (std::fabs(ee_jacobian.determinant()) > 1e-6) {
-        Eigen::VectorXd ee_wrench_raw = ee_jacobian.transpose().inverse() * eff;
-        
-        ee_wrench_msg.wrench.force.x = ee_wrench_raw(0);
-        ee_wrench_msg.wrench.force.y = ee_wrench_raw(1);
-        ee_wrench_msg.wrench.force.z = ee_wrench_raw(2);
-        ee_wrench_msg.wrench.torque.x = ee_wrench_raw(3);
-        ee_wrench_msg.wrench.torque.y = ee_wrench_raw(4);
-        ee_wrench_msg.wrench.torque.z = ee_wrench_raw(5);
-        
-        ee_wrench_publisher_->publish(ee_wrench_msg);
-      }
-      else
-      {
-        RCLCPP_WARN(this->get_logger(), "Singularity! Cannot compute wrench");
-      }
-    }
+    ee_wrench_publisher_->publish(ee_wrench_msg);
 
     // Publish Center of Mass
     auto& model = arm_->robotModel();
