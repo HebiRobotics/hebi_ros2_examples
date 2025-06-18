@@ -1,3 +1,4 @@
 diff_drive_node:
-  names: [ "W1_left", "W2_right" ]
-  families: [ "DiffDrive" ]
+  ros__parameters:
+    names: [ "W1_left", "W2_right" ]
+    families: [ "DiffDrive" ]
