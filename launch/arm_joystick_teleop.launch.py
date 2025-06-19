@@ -9,57 +9,52 @@ from launch_ros.substitutions import FindPackageShare
 def generate_launch_description():
 
     # Declare arguments
-    declared_arguments = []
-    declared_arguments.append(
+    declared_arguments = [
         DeclareLaunchArgument(
             "hebi_arm",
-            description="Name of the robot to be used.",
-        )
-    )
-    declared_arguments.append(
+            description="Name of the robot to be used."
+        ),
         DeclareLaunchArgument(
             "prefix",
             default_value="",
-            description="Prefix for the HEBI Arm name. Usually the argument is not set",
-        )
-    )
-    declared_arguments.append(
+            description="Prefix for the HEBI Arm name."
+        ),
         DeclareLaunchArgument(
             "use_rviz",
             default_value="true",
-            description="Whether to start RViz.",
-        )
-    )
-    declared_arguments.append(
+            description="Whether to start RViz."
+        ),
         DeclareLaunchArgument(
             "description_package",
             default_value="hebi_description",
             description="Description package of the URDF. Usually the argument is not set, \
-                        it enables use of a custom description.",
-        )
-    )
-    declared_arguments.append(
+                         it enables use of a custom description."
+        ),
         DeclareLaunchArgument(
             "config_package",
             default_value="hebi_description",
-            description="Package of the arm's config file. Usually the argument is not set, \
-                        it enables use of a custom config.",
-        )
-    )
-    declared_arguments.append(
+            description="Configuration package."
+        ),
         DeclareLaunchArgument(
             "config_file",
             default_value=PythonExpression(['"', LaunchConfiguration("hebi_arm"), '.cfg.yaml"']),
-            description="Config file for the arm of type `.cfg.yaml`",
-        )
-    )
+            description="Config file for the arm of type `.cfg.yaml`."
+        ),
+        DeclareLaunchArgument(
+            "generate_urdf",
+            default_value="true",
+            description="Generate URDF from HRDF or use pre-existing one."
+        ),
+    ]
 
+    # Configuration variables
     hebi_arm = LaunchConfiguration("hebi_arm")
     prefix = LaunchConfiguration("prefix")
     description_package = LaunchConfiguration("description_package")
     config_package = LaunchConfiguration("config_package")
     config_file = LaunchConfiguration("config_file")
     use_rviz = LaunchConfiguration("use_rviz")
+    generate_urdf = LaunchConfiguration("generate_urdf")
 
     joystick_node = Node(
         package="hebi_ros2_examples",
@@ -89,6 +84,7 @@ def generate_launch_description():
             "description_package": description_package,
             "config_package": config_package,
             "config_file": config_file,
+            "generate_urdf": generate_urdf,
         }.items(),
     )
 
