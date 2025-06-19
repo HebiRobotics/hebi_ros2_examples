@@ -9,10 +9,10 @@ Each method offers unique advantages for different use cases and levels of integ
 
 For assistance or inquiries about implementing these control methods, please contact HEBI Robotics support at support@hebirobotics.com.
 
-## Seting up your Workspace
+## Setting up your Workspace
 
-Run the following commands to download the HEBI ROS 2 packages.
-```
+Run the following commands to download the HEBI ROS 2 packages:
+```bash
 mkdir -p ~/hebi_ws/src
 cd ~/hebi_ws/src
 git clone https://github.com/HebiRobotics/hebi_cpp_api_ros.git
@@ -23,19 +23,19 @@ git clone https://github.com/HebiRobotics/hebi_ros2_examples.git
 
 Install the necessary dependencies using `rosdep`:
 
-```
+```bash
 rosdep update
 rosdep install --from-paths src --ignore-src -r -y
 ```
 
-NOTE: If your ROS distribution is End-of-Life (EOL), you might need to include EOL distributions in your rosdep commands:
-```
+**NOTE:** If your ROS distribution is End-of-Life (EOL), you might need to include EOL distributions in your rosdep commands:
+```bash
 rosdep update --include-eol-distros
 rosdep install --from-paths src --ignore-src -r -y --include-eol-distros
 ```
 
 Finally, build the workspace and source it:
-```
+```bash
 cd ~/hebi_ws
 colcon build --symlink-install
 source install/setup.bash
@@ -45,15 +45,18 @@ source install/setup.bash
 
 For standalone control using the HEBI ROS 2 API, only an HRDF (HEBI Robot Description Format) file is required. See the [HEBI Documentation](https://docs.hebi.us/tools.html#robot-description-format) for a detailed explanation of the HRDF format.
 
-However, for visualization using RViz (even when using the standalone API), controlling using ROS 2 control, MoveIt, or simulating in simulators such as Gazebo, a URDF file is required.
+However, for controlling using ROS 2 control, integrating with MoveIt, or simulating in environments such as Gazebo, a URDF file is necessary.
 
-The HRDFs and URDFs for the standard HEBI arm kits are provided in the `hebi_description` package.
+The `hebi_description` package provides both HRDFs and URDFs for the standard HEBI arm kits.
 
 ### Non-standard Kits
 
 If you are using a non-standard HEBI kit:
-1. **HRDF Creation:** Creating an HRDF file is fairly simple. Examine the standard HEBI kit HRDFs in the `config/arms/hrdf` directory of the `hebi_description` package for examples.
-2. **URDF Generation:** A script is provided in the `hebi_description` repository to convert HRDF to URDF. Refer to the documentation provided in `hebi_description` for usage instructions.
+1. **HRDF Creation:** Creating an HRDF file is relatively straightforward. Examine the standard HEBI kit HRDFs in the `config/arms/hrdf` directory of the `hebi_description` package for reference.
+2. **URDF Generation:** A conversion script is available in the `hebi_description` repository to convert HRDF to URDF. Refer to the documentation provided in `hebi_description` for usage instructions.
+
+### Important Note
+While only HRDF is necessary when using the standalone ROS API, RViz visualization requires a URDF. The launch files include a `generate_urdf` argument (enabled by default) that automatically converts the HRDF to a URDF using the provided script, so you do not need to generate a URDF manually. See the [URDF Generation](#urdf-generation) section for more details.
 
 ## Standalone HEBI ROS 2 API
 
@@ -149,45 +152,66 @@ The HEBI C++ API is wrapped in ROS 2 within the `arm_node` (`src/kits/arms/arm_n
 ### Launching the Arm Node
 
 To launch the arm node, use:
-```
+```bash
 ros2 launch hebi_ros2_examples arm.launch.py hebi_arm:=<your_robot_name>
 ```
 **NOTE:** Do not forget to build your workspace and source your setup before running the above command.
 
-By default, the `arm.launch.py` file sets `config_package` to `hebi_description` and `config_file` to `<your_robot_name>.cfg.yaml` (HEBI naming convention).
+#### Launch Arguments
 
-For custom config files, use the `config_package` and `config_file` parameters to specify your file location.
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `hebi_arm` | (required) | Name of the robot to use |
+| `config_package` | `hebi_description` | ROS package containing the config file |
+| `config_file` | `<your_robot_name>.cfg.yaml` | Config file path relative to `config_package` |
+| `prefix` | `""` | Namespace for topics and prefix for joint names |
+| `use_rviz` | `true` | Whether to start RViz |
+| `generate_urdf` | `true` | Generate URDF from HRDF or use pre-existing one |
+
+#### URDF Generation
+
+Both `arm.launch.py` and `arm_joystick_teleop.launch.py` include a parameter to control URDF generation:
+
+- When `generate_urdf:=true` (default): The launch file will automatically generate a URDF from the HRDF file specified in your config, and save it in a cache directory (`~/.cache/hebi/hebi_arm.urdf.xacro`).
+- When `generate_urdf:=false`: The launch file will use a pre-existing URDF from the description package located at `<description_package>/urdf/kits/<your_robot_name>.urdf.xacro`.
 
 ### Examples
 
-To get you started, we have provided three example scripts that use the `arm_node`.
+To get you started, we have provided several example scripts that use the `arm_node`:
 
-1. `move_arm`: This publishes a predefined trajectory using `arm_motion` action
-2. `ex_publish_trajectory`: This publishes a predefined trajectory to the `/joint_trajectory` topic.
-3. `ex_teach_repeat_mobileio`: This uses mobile IO to record and play trajetories, or go to saved waypoints.
-4. `ex_teleop_mobileio`: This uses mobile IO to send jog commands to control the arm.
+1. `move_arm.cpp`: A C++ example that publishes a predefined trajectory using the `arm_motion` action
+2. `ex_publish_trajectory.py`: A Python example that publishes a predefined trajectory to the `/joint_trajectory` topic
+3. `ex_teach_repeat_mobileio.py`: Uses HEBI Mobile IO to record and play trajectories, or go to saved waypoints
+4. `ex_teleop_mobileio.py`: Uses HEBI Mobile IO to send jog commands to control the arm in real-time
 
 ## ROS2 Control
 
-To control HEBI arms using `ros2_control`, you need additional packages: `hebi_hardware` and `hebi_bringup`. Clone these repositories:
-```
+### Additional Required Packages
+
+To control HEBI arms using `ros2_control`, you need additional packages that aren't included in the basic setup:
+
+```bash
+# Clone required repositories
 git clone https://github.com/HebiRobotics/hebi_hardware.git
 git clone -b $ROS_DISTRO https://github.com/HebiRobotics/hebi_bringup.git # ROS_DISTRO can be humble, iron, or jazzy
-```
 
-Install dependencies:
-```
+# Install ROS2 Control dependencies
 sudo apt install ros-$ROS_DISTRO-ros2-control ros-$ROS_DISTRO-ros2-controllers -y
 ```
 
-In addition to the main URDF file, you need three more files for ROS 2 control:
-1. `ros2_control` macro file
-2. URDF combining the macro file with existing URDF
-3. Parameter file
+### Required Configuration Files
+
+For ROS 2 control integration, you'll need the following three types of files:
+
+1. **ROS2 Control Macro File** - Defines hardware interfaces
+2. **Combined URDF File** - Combines the macro with the existing URDF
+3. **Controller Parameter File** - Configures controllers
+
+For standard HEBI kits, these files are already provided in the `hebi_bringup` and `hebi_description` packages.
 
 ### ROS 2 Control Macro File
 
-The template for a HEBI Arm ROS2 Control Macro file is as follows:
+This file defines hardware interfaces and plugins for your robot. The template below shows the structure for a HEBI Arm ROS2 Control Macro file:
 ```
 <?xml version="1.0" encoding="UTF-8"?>
 <robot xmlns:xacro="http://wiki.ros.org/xacro">
@@ -282,7 +306,7 @@ According to conventions, this file should be named as `<your_robot_name>.ros2_c
 
 ### ROS 2 Control URDF 
 
-The template for the URDF xacro file combining the `ros2_control` macro and the main URDF is as follows:
+This file combines the ROS2 control macro with the main robot URDF. Here's a template:
 ```
 <?xml version="1.0" encoding="UTF-8"?>
 <robot xmlns:xacro="http://wiki.ros.org/xacro" name="<your_robot_name>">
@@ -326,7 +350,7 @@ According to conventions, this file should be named as `<your_robot_name>.urdf.x
 
 ### ROS2 Control Parameter File
 
-This file configures ROS 2 control parameters. Refer to the [ROS2 Control documentation](https://control.ros.org/rolling/doc/ros2_controllers/doc/controllers_index.html#controllers-for-manipulators-and-other-robots) for details.
+This YAML file configures the controllers used with your robot. Refer to the [ROS2 Controllers Documentation](https://control.ros.org/rolling/doc/ros2_controllers/doc/controllers_index.html#controllers-for-manipulators-and-other-robots) for detailed information.
 
 Here's an example parameter file for the A-2580-06 arm:
 ```
@@ -369,85 +393,161 @@ hebi_arm_controller:
 
 ### Launching HEBI Arm with ROS 2 Control
 
-To execute the ROS 2 Control node with the hardware, run the following command:
+#### Hardware Execution
+
+To launch the ROS 2 Control node with real hardware:
+
+```bash
+ros2 launch hebi_bringup bringup_arm.launch.py hebi_arm:=<your_robot_name> use_mock_hardware:=false
 ```
-ros2 launch hebi_bringup bringup_arm.launch.py hebi_arm:=<your_robot_name> config_pkg:=<config_pkg> config_file_path:="<config_file_path>"
-use_mock_hardware:=true/false
+
+#### Simulated Execution
+
+For testing without hardware (mock mode):
+
+```bash
+ros2 launch hebi_bringup bringup_arm.launch.py hebi_arm:=<your_robot_name>
 ```
-The default value of `use_mock_hardware` is true, and not setting `config_pkg` and `config_file_path` explicitly will default them to `hebi_description` and `config/<hebi_arm>.cfg.yaml` respectively.
+
+#### Launch Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `hebi_arm` | (required) | Name of the robot to use |
+| `use_mock_hardware` | `true` | Use mock hardware interface instead of real hardware |
+| `config_pkg` | `hebi_description` | Package containing the config file |
+| `config_file_path` | `config/<hebi_arm>.cfg.yaml` | Path to config file relative to config_pkg |
+| `use_rviz` | `true` | Launch RViz for visualization |
 
 Here's an example to launch A-2580-06 arm with mock hardware:
-```
+```bash
 ros2 launch hebi_bringup bringup_arm.launch.py hebi_arm:=A-2580-06
 ```
-There are other arguments that can be passed to the `bringup_arm.launch.py` file. Please refer the launch file to see all the parameters.
 
-### Gazebo Classic
+### Gazebo Classic Simulation
 
-To execute the ROS 2 Control node with Gazebo classic simulation, run the following command:
-```
+To launch your HEBI arm in Gazebo Classic simulation:
+
+```bash
 ros2 launch hebi_bringup bringup_arm_gazebo_classic.launch.py hebi_arm:=<your_robot_name>
 ```
-**NOTE:** Do not forget to build your workspace and source your setup before running the above commands. Also, ensure you have necessary packages installed such as `gazebo_ros`, `gazebo_ros2_control`
+**NOTE:** Do not forget to build your workspace and source your setup before running the above commands.
 
-To test the controllers for your arm, use the following command:
+**Prerequisites:** Ensure you have Gazebo (`gazebo_ros`) and Gazebo ROS 2 Control (`gazebo_ros2_control`) installed. To install these packages, run:
+```bash
+sudo apt install ros-$ROS_DISTRO-gazebo-ros ros-$ROS_DISTRO-gazebo-ros2-control
 ```
+
+### Testing Controllers
+
+After launching your arm in hardware or simulation, you can test the controllers:
+
+```bash
 ros2 launch hebi_bringup test_joint_trajectory_controller.launch.py config_file:=<test_config_file_path>
 ```
 
-This launch file executes the publisher_joint_trajectory_controller from the ros2_controllers_test_nodes package, and uses the specified test configuration file to define the joint trajectories.
+This launch file executes a trajectory controller test node, and uses the specified test configuration to define joint trajectories.
 
-**NOTE:**
-- The `config_file` parameter must point to a file within the `config` directory of the `hebi_bringup` package
-- By default, `config_file` is set to `test_goal_publishers_config.yaml`, which is configured for a 6-DoF arm. Please edit this file to match your specific arm configuration before testing
+**Important Configuration:**
+- The `config_file` parameter must reference a file in the `hebi_bringup/config` directory
+- Default configuration (`test_goal_publishers_config.yaml`) is set for a 6-DoF arm
+- For different arm configurations, edit the file to match your specific joint setup
 
-Upon successful launch, you should observe the robotic arm moving according to the joint positions specified in the configuration file.
+When executed correctly, your robot arm will move through the joint positions defined in the config file.
 
-### Gazebo (Ignition)
+### Gazebo (Ignition) Simulation
 
-To execute the ROS 2 Control node with Gazebo (ignition) simulation, run the following command:
-```
+For the newer Gazebo (formerly Ignition) simulation:
+
+```bash
 ros2 launch hebi_bringup bringup_arm_gazebo.launch.py hebi_arm:=<your_robot_name>
 ```
-**NOTE:** Do not forget to build your workspace and source your setup before running the above commands. Also, ensure you have necessary packages installed such as `ros_gz`, `ign_ros2_control` / `gz_ros2_control`.
+**NOTE:** Do not forget to build your workspace and source your setup before running the above commands.
 
-To test the controller, you can utilize the same launch file as mentioned above (`test_joint_trajectory_controller.launch.py`).
+**Prerequisites:**
+Ensure you have Gazebo (`ros_gz`) and Gazebo ROS 2 Control (`ign_ros2_control` / `gz_ros2_control`) installed. To install these packages, run:
+- `sudo apt install ros-humble-ros-gz ros-humble-ign-ros2-control` for ROS 2 Humble
+- `sudo apt install ros-$ROS_DISTRO-ros-gz ros-$ROS_DISTRO-gz-ros2-control` for ROS 2 Iron/Jazzy
+
+To test the controller in Gazebo, use the same approach as with Gazebo Classic:
+
+```bash
+ros2 launch hebi_bringup test_joint_trajectory_controller.launch.py config_file:=<test_config_file_path>
+```
 
 ## MoveIt
 
-To use MoveIt with a HEBI Arm, you need SRDF and other configuration files required by MoveIt, along with the ROS 2 control repositories mentioned earlier. For standard HEBI kits, these files are provided and can be downloaded using the following command:
-```
+### Getting MoveIt Configurations
+
+MoveIt requires additional configuration files (SRDF, controllers, kinematics, etc.) beyond what we've covered so far. For standard HEBI arm kits, these configurations are already available:
+
+```bash
+cd ~/hebi_ws/src
 git clone https://github.com/HebiRobotics/hebi_moveit_configs.git
 ```
 
-For custom setups, please refer to the [HebiRobotics/hebi_moveit_configs](https://github.com/HebiRobotics/hebi_moveit_configs) repository for detailed instructions on creating a MoveIt configuration package for your custom arm using the MoveIt Setup Assistant.
+This repository contains ready-to-use MoveIt configurations for all standard HEBI arm kits. After cloning, do not forget to rebuild your workspace and source your setup.
 
-### MoveIt on Hardware / Gazebo
+### Custom Arm Configurations
+
+For custom HEBI arm setups, you'll need to create your own MoveIt configuration package:
+
+1. Use the MoveIt Setup Assistant to generate configuration files
+2. Follow the detailed instructions in the [hebi_moveit_configs](https://github.com/HebiRobotics/hebi_moveit_configs) repository
+
+The setup process involves defining planning groups, robot poses, and end-effectors for your specific arm configuration.
+
+### Launching MoveIt with Hardware or Gazebo
 
 The URDF files in the MoveIt config directory do not have access to HEBI Hardware plugin or Gazebo plugins defined during ROS2 control URDF setup. To simplify the process of modifying URDF, SRDF, and launch files, we provide `move_group.launch.py` in the `hebi_bringup` package.
 
-Use this launch file in parallel with `bringup_arm` launch files, either on hardware or Gazebo:
+We use this launch file in parallel with `bringup_arm.launch.py` to launch MoveIt.
 
-1. First, run one of the following commands:
+#### Step 1: Launch Robot Control
 
-```
-ros2 launch hebi_bringup bringup_arm.launch.py hebi_arm:=<your_robot_name> use_mock_hardware:=false use_rviz:=false
-```
-or
-```
-ros2 launch hebi_bringup bringup_arm_gazebo_classic.launch.py hebi_arm:=<your_robot_name> use_rviz:=false
-```
-or
-```
-ros2 launch hebi_bringup bringup_arm_gazebo.launch.py hebi_arm:=<your_robot_name> use_rviz:=false
+Choose ONE of the following options:
+
+**Option A: Real Hardware**
+```bash
+ros2 launch hebi_bringup bringup_arm.launch.py \
+  hebi_arm:=<your_robot_name> \
+  use_mock_hardware:=false \
+  use_rviz:=false
 ```
 
-2. Then, launch the move_group:
-
+**Option B: Gazebo Classic Simulation**
+```bash
+ros2 launch hebi_bringup bringup_arm_gazebo_classic.launch.py \
+  hebi_arm:=<your_robot_name> \
+  use_rviz:=false
 ```
-ros2 launch hebi_bringup move_group.launch.py hebi_arm:=<your_robot_name> use_sim_time:=true/false
+
+**Option C: Gazebo (Ignition) Simulation**
+```bash
+ros2 launch hebi_bringup bringup_arm_gazebo.launch.py \
+  hebi_arm:=<your_robot_name> \
+  use_rviz:=false
 ```
 
-Set `use_sim_time` to `true` when using simulators like Gazebo.
+#### Step 2: Launch MoveIt
 
-We set `use_rviz:=false` in the first launch file to prevent duplicate RViz windows. After running the `move_group` launch command, you should see an RViz window with MoveIt loaded.
+After the robot control system is running, launch MoveIt:
+
+```bash
+ros2 launch hebi_bringup move_group.launch.py \
+  hebi_arm:=<your_robot_name> \
+  use_sim_time:=true/false
+```
+
+Set `use_sim_time:=true` when using simulation, and `use_sim_time:=false` with real hardware.
+
+**Note:** We set `use_rviz:=false` in the first step to avoid duplicate RViz windows. The MoveIt launch file will open RViz with the MoveIt configuration loaded.
+
+## Additional Resources
+
+- [HEBI Documentation](https://docs.hebi.us) - Comprehensive documentation on HEBI modules and APIs
+- [HEBI Forums](https://forum.hebi.us) - Community support and discussions
+- [ROS 2 Control Documentation](https://control.ros.org) - Detailed information about ROS 2 control
+- [MoveIt Documentation](https://moveit.ros.org) - Resources for using MoveIt
+
+For further assistance, contact HEBI Robotics support at support@hebirobotics.com.
