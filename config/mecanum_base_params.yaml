@@ -1,4 +1,5 @@
 mecanum_base_node:
-  names: [ "frontLeft", "backLeft", "frontRight", "backRight" ]
-  families: [ "mecanumBase" ]
-  publish_odom: true
+  ros__parameters:
+    names: [ "frontLeft", "backLeft", "frontRight", "backRight" ]
+    families: [ "mecanumBase" ]
+    publish_odom: true

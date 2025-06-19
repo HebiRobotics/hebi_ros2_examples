@@ -7,13 +7,12 @@ from launch.actions import DeclareLaunchArgument
 
 def generate_launch_description():
   
-  # Declare arguments
   declared_arguments = []
   declared_arguments.append(
     DeclareLaunchArgument(
       "params_file",
-      default_value="omni_base_params.yaml",
-      description="Path to the YAML file containing the parameters for the arm node.",
+      default_value="mecanum_base_params.yaml",
+      description="Path to the YAML file containing the parameters for the base node.",
     )
   )
 
@@ -23,10 +22,10 @@ def generate_launch_description():
     [FindPackageShare('hebi_ros2_examples'), 'config', params_file]
   )
 
-  omni_base_node = Node(
+  mecanum_base_node = Node(
     package='hebi_ros2_examples',
-    executable='omni_base_node',
-    name='omni_base_node',
+    executable='mecanum_base_node',
+    name='mecanum_base_node',
     output='screen',
     parameters=[
       robot_params
@@ -41,7 +40,7 @@ def generate_launch_description():
           PathJoinSubstitution([FindExecutable(name="xacro")]),
           " ",
           PathJoinSubstitution(
-              [FindPackageShare(description_package), "urdf", "kits", "omnibase.urdf.xacro"]
+              [FindPackageShare(description_package), "urdf", "kits", "mecanum_base.urdf.xacro"]
           )
       ]
   )
@@ -68,7 +67,7 @@ def generate_launch_description():
   return LaunchDescription(
     declared_arguments +
     [
-      omni_base_node,
+      mecanum_base_node,
       robot_state_publisher_node,
       rviz_node
     ]
