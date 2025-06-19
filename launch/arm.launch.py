@@ -1,3 +1,4 @@
+import os
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, RegisterEventHandler, ExecuteProcess
 from launch.substitutions import Command, FindExecutable, LaunchConfiguration, PathJoinSubstitution, PythonExpression
@@ -63,7 +64,8 @@ def generate_launch_description():
     use_rviz = LaunchConfiguration("use_rviz")
 
     # Generate URDF from config file
-    urdf_output_dir = "/tmp/hebi"
+    urdf_output_dir = os.path.join(os.path.expanduser("~"), ".cache", "hebi")
+    os.makedirs(urdf_output_dir, exist_ok=True)
     urdf_output_file_name = "hebi_arm.urdf.xacro"
     urdf_generator = ExecuteProcess(
         cmd=[
