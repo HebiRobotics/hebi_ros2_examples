@@ -45,7 +45,7 @@ public:
     base_->resetStart(c);
 
     // Publish Joint State
-    state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("mecanum_base/joint_states", 100);
+    state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("joint_states", 100);
 
     // start the action server
     this->action_server_ = rclcpp_action::create_server<BaseMotion>(
