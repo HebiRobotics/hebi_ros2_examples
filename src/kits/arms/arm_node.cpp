@@ -10,6 +10,7 @@
 #include <geometry_msgs/msg/wrench.hpp>
 #include <geometry_msgs/msg/wrench_stamped.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/float64.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include <hebi_msgs/action/arm_motion.hpp>
 
@@ -88,6 +89,7 @@ public:
     center_of_mass_publisher_ = this->create_publisher<geometry_msgs::msg::Inertia>("inertia", 10);
     end_effector_pose_publisher_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("ee_pose", 10);
     ee_wrench_publisher_ = this->create_publisher<geometry_msgs::msg::WrenchStamped>("ee_wrench", 10);
+    goal_progress_publisher_ = this->create_publisher<std_msgs::msg::Float64>("goal_progress", 10);
 
     // Services
     home_service_ = this->create_service<std_srvs::srv::Trigger>("home", std::bind(&ArmNode::homeCallback, this, std::placeholders::_1, std::placeholders::_2));
@@ -164,6 +166,7 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::Inertia>::SharedPtr center_of_mass_publisher_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr end_effector_pose_publisher_;
   rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr ee_wrench_publisher_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr goal_progress_publisher_;
 
   rclcpp_action::Server<hebi_msgs::action::ArmMotion>::SharedPtr action_server_;
 
@@ -821,6 +824,11 @@ private:
     center_of_mass_message_.com.z = weighted_sum_com(2);
 
     center_of_mass_publisher_->publish(center_of_mass_message_);
+
+    // Publish Goal Progress
+    std_msgs::msg::Float64 goal_progress_msg;
+    goal_progress_msg.data = arm_->goalProgress();
+    goal_progress_publisher_->publish(goal_progress_msg);
   }
 
   void setColor(const Color& color) {
