@@ -132,8 +132,8 @@ Here are some key points to note:
 The HEBI C++ API is wrapped in ROS 2 within the `arm_node` (`src/kits/arms/arm_node.cpp`). This node, utilizing the HEBI Arm API, provides various topics, services, and actions for arm control:
 
 **Subscribers**
-- */SE3_jog [control_msgs/msg/JointJog]*: Command end effector jog in SE3 space (cartesian and rotation)
-- */cartesian_jog [control_msgs/msg/JointJog]*: Command end effector jog in cartesian space (x, y, z)
+- */SE3_jog [hebi_msgs/msg/SE3Jog]*: Command end effector jog in SE3 space (cartesian and rotation)
+- */cartesian_jog [hebi_msgs/msg/SE3Jog]*: Command end effector jog in cartesian space (x, y, z). Any angular displacement values set in the message are ignored.
 - */cartesian_trajectory [trajectory_msgs/msg/JointTrajectory]*: Command a trajectory for the end effector in cartesian space
 - */joint_jog [control_msgs/msg/JointJog]*: Command jog in joint angles
 - */joint_trajectory [trajectory_msgs/msg/JointTrajectory]*: Command a trajectory in joint angles
@@ -143,7 +143,7 @@ The HEBI C++ API is wrapped in ROS 2 within the `arm_node` (`src/kits/arms/arm_n
 - */ee_pose [geometry_msgs/msg/PoseStamped]*: End effector pose in SE3 space
 - */joint_states [sensor_msgs/msg/JointState]*: Joint angles of the arm
 - */inertia [geometry_msgs/msg/Inertia]*: Inertia of the arm
-- */ee_wrench [geometry_msgs/msg/WrenchStamped]*: End effector wrench (force and torque) feedback in the base frame
+- */ee_wrench [geometry_msgs/msg/WrenchStamped]*: End effector wrench (force and torque) feedback in the base frame, calculated from torque errors
 
 **Action Servers**
 - */arm_motion [hebi_msgs/action/ArmMotion]*: Command an arm trajectory in either joint space or SE3 space
@@ -195,6 +195,7 @@ To get you started, we have provided several example scripts that use the `arm_n
 2. `ex_publish_trajectory.py`: A Python example that publishes a predefined trajectory to the `/joint_trajectory` topic
 3. `ex_teach_repeat_mobileio.py`: Uses HEBI Mobile IO to record and play trajectories, or go to saved waypoints
 4. `ex_teleop_mobileio.py`: Uses HEBI Mobile IO to send jog commands to control the arm in real-time
+5. `ex_haptic_teleop_node.py`: Uses a 3D Systems Touch X haptic device to control the arm in real-time with haptic feedback by sending jog commands while receiving force feedback from the `ee_wrench` topic
 
 ## ROS2 Control
 
