@@ -1,5 +1,5 @@
 #include "rclcpp/rclcpp.hpp"
-#include <control_msgs/msg/joint_jog.hpp>
+#include <hebi_msgs/msg/se3_jog.hpp>
 
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 #include <sensor_msgs/msg/joy.hpp>
@@ -39,8 +39,8 @@ public:
         std::bind(&JoystickNode::timer_callback, this));
 
     // Publishers
-    cartesian_jog_publisher_ = this->create_publisher<control_msgs::msg::JointJog>(prefix_ + "/cartesian_jog", 50);
-    SE3_jog_publisher_ = this->create_publisher<control_msgs::msg::JointJog>(prefix_ + "/SE3_jog", 50);
+    cartesian_jog_publisher_ = this->create_publisher<hebi_msgs::msg::SE3Jog>(prefix_ + "/cartesian_jog", 50);
+    SE3_jog_publisher_ = this->create_publisher<hebi_msgs::msg::SE3Jog>(prefix_ + "/SE3_jog", 50);
 
     // Subscribers
     joy_subscriber_ = this->create_subscription<sensor_msgs::msg::Joy>("joy", 10, std::bind(&JoystickNode::joy_callback, this, std::placeholders::_1));
@@ -61,8 +61,8 @@ private:
   // Create Objects
   double rate = 200.0;
   rclcpp::TimerBase::SharedPtr timer_;
-  rclcpp::Publisher<control_msgs::msg::JointJog>::SharedPtr cartesian_jog_publisher_;
-  rclcpp::Publisher<control_msgs::msg::JointJog>::SharedPtr SE3_jog_publisher_;
+  rclcpp::Publisher<hebi_msgs::msg::SE3Jog>::SharedPtr cartesian_jog_publisher_;
+  rclcpp::Publisher<hebi_msgs::msg::SE3Jog>::SharedPtr SE3_jog_publisher_;
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_subscriber_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_subscriber_;
   rclcpp::Client<std_srvs::srv::Empty>::SharedPtr home_client_;
@@ -170,15 +170,15 @@ private:
   void cartesian_jog_pub()
   {
     // Initialize Cartesian Jog Message
-    control_msgs::msg::JointJog cartesian_jog_msg;
+    hebi_msgs::msg::SE3Jog cartesian_jog_msg;
 
     cartesian_jog_msg.header.stamp = get_clock()->now();
     cartesian_jog_msg.header.frame_id = "";
     cartesian_jog_msg.duration = 1.0 / rate; // seconds
 
-    cartesian_jog_msg.joint_names = {"x", "y", "z"};
-    cartesian_jog_msg.displacements = {x_vel_, y_vel_, z_vel_};
-    cartesian_jog_msg.velocities = {x_vel_, y_vel_, z_vel_};
+    cartesian_jog_msg.dx = x_vel_;
+    cartesian_jog_msg.dy = y_vel_;
+    cartesian_jog_msg.dz = z_vel_;
 
     cartesian_jog_publisher_->publish(cartesian_jog_msg);
   }
@@ -186,15 +186,18 @@ private:
   void SE3_jog_pub()
   {
     // Initialize SE(3) Jog Message
-    control_msgs::msg::JointJog SE3_jog_msg;
+    hebi_msgs::msg::SE3Jog SE3_jog_msg;
 
     SE3_jog_msg.header.stamp = get_clock()->now();
     SE3_jog_msg.header.frame_id = "";
-    SE3_jog_msg.duration = 1.0 / rate; // seconds
+    SE3_jog_msg.duration = 5.0 / rate; // seconds
 
-    SE3_jog_msg.joint_names = {"x", "y", "z", "roll", "pitch", "yaw"};
-    SE3_jog_msg.displacements = {x_vel_, y_vel_, z_vel_, roll_vel_, pitch_vel_, yaw_vel_};
-    SE3_jog_msg.velocities = {x_vel_, y_vel_, z_vel_, roll_vel_, pitch_vel_, yaw_vel_};
+    SE3_jog_msg.dx = x_vel_;
+    SE3_jog_msg.dy = y_vel_;
+    SE3_jog_msg.dz = z_vel_;
+    SE3_jog_msg.droll = roll_vel_;
+    SE3_jog_msg.dpitch = pitch_vel_;
+    SE3_jog_msg.dyaw = yaw_vel_;
 
     SE3_jog_publisher_->publish(SE3_jog_msg);
   }

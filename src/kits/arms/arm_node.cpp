@@ -3,6 +3,7 @@
 #include <ament_index_cpp/get_package_share_directory.hpp>
 
 #include <control_msgs/msg/joint_jog.hpp>
+#include <hebi_msgs/msg/se3_jog.hpp>
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <geometry_msgs/msg/inertia.hpp>
@@ -78,8 +79,8 @@ public:
 
     // Subscribers
     joint_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("joint_jog", 10, std::bind(&ArmNode::jointJogCallback, this, std::placeholders::_1));
-    cartesian_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("cartesian_jog", 10, std::bind(&ArmNode::cartesianJogCallback, this, std::placeholders::_1));
-    SE3_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("SE3_jog", 10, std::bind(&ArmNode::SE3JogCallback, this, std::placeholders::_1));
+    cartesian_jog_subscriber_ = this->create_subscription<hebi_msgs::msg::SE3Jog>("cartesian_jog", 10, std::bind(&ArmNode::cartesianJogCallback, this, std::placeholders::_1));
+    SE3_jog_subscriber_ = this->create_subscription<hebi_msgs::msg::SE3Jog>("SE3_jog", 10, std::bind(&ArmNode::SE3JogCallback, this, std::placeholders::_1));
     joint_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("joint_trajectory", 10, std::bind(&ArmNode::jointWaypointsCallback, this, std::placeholders::_1));
     cartesian_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("cartesian_trajectory", 10, std::bind(&ArmNode::cartesianWaypointsCallback, this, std::placeholders::_1));
     cmd_ee_wrench_subscriber_ = this->create_subscription<geometry_msgs::msg::Wrench>("cmd_ee_wrench", 10, std::bind(&ArmNode::wrenchCommandCallback, this, std::placeholders::_1));
@@ -156,8 +157,8 @@ private:
   geometry_msgs::msg::Inertia center_of_mass_message_;
 
   rclcpp::Subscription<control_msgs::msg::JointJog>::SharedPtr joint_jog_subscriber_;
-  rclcpp::Subscription<control_msgs::msg::JointJog>::SharedPtr cartesian_jog_subscriber_;
-  rclcpp::Subscription<control_msgs::msg::JointJog>::SharedPtr SE3_jog_subscriber_;
+  rclcpp::Subscription<hebi_msgs::msg::SE3Jog>::SharedPtr cartesian_jog_subscriber_;
+  rclcpp::Subscription<hebi_msgs::msg::SE3Jog>::SharedPtr SE3_jog_subscriber_;
   rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr cartesian_waypoint_subscriber_;
   rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr joint_waypoint_subscriber_;
   rclcpp::Subscription<geometry_msgs::msg::Wrench>::SharedPtr cmd_ee_wrench_subscriber_;
@@ -638,16 +639,11 @@ private:
 
   // "Jog" the target end effector location in cartesian space, replanning
   // smoothly to the new location
-  void cartesianJogCallback(const control_msgs::msg::JointJog::SharedPtr jog_msg) {
+  void cartesianJogCallback(const hebi_msgs::msg::SE3Jog::SharedPtr jog_msg) {
 
     if (!checkArmConditions("cartesian_jog"))
       return;
 
-    if (jog_msg->displacements.size() != 3) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Displacement size not correct");
-      return;
-    }
-    
     // Get current position and orientation
     // (We use the last position command for smoother motion)
     Eigen::Vector3d cur_pos;
@@ -662,9 +658,9 @@ private:
     Eigen::VectorXd times(1);
 
     times(0) = jog_msg->duration;
-    xyz_positions(0, 0) = cur_pos[0] + jog_msg->displacements[0];
-    xyz_positions(1, 0) = cur_pos[1] + jog_msg->displacements[1];
-    xyz_positions(2, 0) = cur_pos[2] + jog_msg->displacements[2];
+    xyz_positions(0, 0) = cur_pos[0] + jog_msg->dx;
+    xyz_positions(1, 0) = cur_pos[1] + jog_msg->dy;
+    xyz_positions(2, 0) = cur_pos[2] + jog_msg->dz;
     euler_angles(0, 0) = cur_euler[0];
     euler_angles(1, 0) = cur_euler[1];
     euler_angles(2, 0) = cur_euler[2];
@@ -676,16 +672,11 @@ private:
   // "Jog" the target end effector location in SE(3), replanning
   // smoothly to the new location
   // First three entires are linear, and last three are angular
-  void SE3JogCallback(const control_msgs::msg::JointJog::SharedPtr jog_msg) {
+  void SE3JogCallback(const hebi_msgs::msg::SE3Jog::SharedPtr jog_msg) {
 
     if (!checkArmConditions("SE3_jog"))
       return;
 
-    if (jog_msg->displacements.size() != 6) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Displacement size not correct");
-      return;
-    }
-    
     // Get current position and orientation
     // (We use the last position command for smoother motion)
     Eigen::Vector3d cur_pos;
@@ -703,15 +694,15 @@ private:
     // In our convention, yaw is global (extrinsic) and roll is local (intrinsic), with respect to the end-effector frame
     times(0) = jog_msg->duration;
     new_orientation = cur_orientation
-                      * Eigen::AngleAxisd(jog_msg->displacements[5], Eigen::Vector3d::UnitY()).matrix() 
-                      * Eigen::AngleAxisd(jog_msg->displacements[4], Eigen::Vector3d::UnitX()).matrix()
-                      * Eigen::AngleAxisd(jog_msg->displacements[3], Eigen::Vector3d::UnitZ()).matrix();
+                      * Eigen::AngleAxisd(jog_msg->dyaw, Eigen::Vector3d::UnitY()).matrix()   // Yaw
+                      * Eigen::AngleAxisd(jog_msg->dpitch, Eigen::Vector3d::UnitX()).matrix() // Pitch
+                      * Eigen::AngleAxisd(jog_msg->droll, Eigen::Vector3d::UnitZ()).matrix(); // Roll
 
     euler_angles = new_orientation.eulerAngles(0, 1, 2);
 
-    xyz_positions(0, 0) = cur_pos[0] + jog_msg->displacements[0]; // x
-    xyz_positions(1, 0) = cur_pos[1] + jog_msg->displacements[1]; // y
-    xyz_positions(2, 0) = cur_pos[2] + jog_msg->displacements[2]; // z
+    xyz_positions(0, 0) = cur_pos[0] + jog_msg->dx; // x
+    xyz_positions(1, 0) = cur_pos[1] + jog_msg->dy; // y
+    xyz_positions(2, 0) = cur_pos[2] + jog_msg->dz; // z
 
     // Replan
     updateSE3Waypoints(use_traj_times_, times, xyz_positions, &euler_angles, false);
@@ -786,8 +777,9 @@ private:
     arm_->robotModel().getJacobianEndEffector(pos, ee_jacobian);
     // Calculate pseudo-inverse of J^T
     Eigen::MatrixXd ee_jacobian_t_pinv = ee_jacobian.transpose().completeOrthogonalDecomposition().pseudoInverse();
-    // Calculate wrench as (J^T)^-1 * joint effort
-    Eigen::VectorXd ee_wrench = ee_jacobian_t_pinv * eff;
+    // Calculate wrench as (J^T)^-1 * joint effort errors
+    Eigen::VectorXd eff_cmd = fdbk.getEffortCommand();
+    Eigen::VectorXd ee_wrench = ee_jacobian_t_pinv * (eff_cmd - eff);
     
     geometry_msgs::msg::WrenchStamped ee_wrench_msg;
     ee_wrench_msg.header.stamp = this->now();
