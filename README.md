@@ -152,6 +152,7 @@ The HEBI C++ API is wrapped in ROS 2 within the `arm_node` (`src/kits/arms/arm_n
 - */joint_states [sensor_msgs/msg/JointState]*: Joint angles of the arm
 - */inertia [geometry_msgs/msg/Inertia]*: Inertia of the arm
 - */ee_wrench [geometry_msgs/msg/WrenchStamped]*: End effector wrench (force and torque) feedback in the base frame, calculated from torque errors
+- */ee_force [geometry_msgs/msg/Vector3Stamped]*: End effector force (X, Y, Z components only), computed from the end effector position error. No scaling factor is applied; the output directly reflects the position errors.
 
 **Action Servers**
 - */arm_motion [hebi_msgs/action/ArmMotion]*: Command an arm trajectory in either joint space or SE3 space
@@ -166,6 +167,7 @@ The HEBI C++ API is wrapped in ROS 2 within the `arm_node` (`src/kits/arms/arm_n
 - *prefix*: Namespace for topics and prefix for joint names in `/joint_states`
 - *compliant_mode*: When true, disables arm goals and sets joint efforts to zero for manual movement
 - *ik_seed*: Sets the IK seed for inverse kinematic calculations
+- *use_ik_seed*: When set to true, the node uses the IK seed specified by the `ik_seed` parameter for inverse kinematics calculations. If false, it uses the most recent joint feedback position as the IK seed.
 
 **NOTE:** The `config_package`, `config_file` and `prefix` parameters are set during launch and should not be changed during runtime. On the other hand, `compliant_mode` and `ik_seed` are dynamic parameters.
 

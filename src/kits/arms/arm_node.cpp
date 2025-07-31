@@ -10,6 +10,7 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/wrench.hpp>
 #include <geometry_msgs/msg/wrench_stamped.hpp>
+#include <geometry_msgs/msg/vector3_stamped.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float64.hpp>
 #include <std_srvs/srv/trigger.hpp>
@@ -41,6 +42,7 @@ public:
 
     // Parameters passed through config file changed during runtime
     auto ik_seed_des = rcl_interfaces::msg::ParameterDescriptor{};
+    auto use_ik_seed_des = rcl_interfaces::msg::ParameterDescriptor{};
     auto use_traj_times_des = rcl_interfaces::msg::ParameterDescriptor{};
     auto compliant_mode_des = rcl_interfaces::msg::ParameterDescriptor{};
 
@@ -48,6 +50,7 @@ public:
     config_package_des.description = "Package containg the config file.";
     prefix_des.description = "Prefix for the arm.";
     ik_seed_des.description = "Seed for inverse kinematics. Can be changed during runtime.";
+    use_ik_seed_des.description = "Use the stored IK seed position. Can be changed during runtime.";
     use_traj_times_des.description = "Can be changed during runtime.";
     compliant_mode_des.description = "No arm motion can be commanded in compliant mode. Can be changed during runtime.";
 
@@ -56,6 +59,7 @@ public:
     this->declare_parameter("config_package", rclcpp::PARAMETER_STRING);
     this->declare_parameter("prefix", "");
     this->declare_parameter("ik_seed", rclcpp::PARAMETER_DOUBLE_ARRAY);
+    this->declare_parameter("use_ik_seed", false);
     this->declare_parameter("use_traj_times", true);
     this->declare_parameter("compliant_mode", false);
 
@@ -74,6 +78,7 @@ public:
 
     // Parameter callbacks
     ik_seed_callback_handle_ = parameter_event_handler_->add_parameter_callback("ik_seed", std::bind(&ArmNode::ikSeedCallback, this, std::placeholders::_1));
+    use_ik_seed_callback_handle_ = parameter_event_handler_->add_parameter_callback("use_ik_seed", std::bind(&ArmNode::useIKSeedCallback, this, std::placeholders::_1));
     use_traj_times_callback_handle_ = parameter_event_handler_->add_parameter_callback("use_traj_times", std::bind(&ArmNode::useTrajTimesCallback, this, std::placeholders::_1));
     compliant_mode_callback_handle_ = parameter_event_handler_->add_parameter_callback("compliant_mode", std::bind(&ArmNode::compliantModeCallback, this, std::placeholders::_1));
 
@@ -90,6 +95,7 @@ public:
     center_of_mass_publisher_ = this->create_publisher<geometry_msgs::msg::Inertia>("inertia", 10);
     end_effector_pose_publisher_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("ee_pose", 10);
     ee_wrench_publisher_ = this->create_publisher<geometry_msgs::msg::WrenchStamped>("ee_wrench", 10);
+    ee_force_publisher_ = this->create_publisher<geometry_msgs::msg::Vector3Stamped>("ee_force", 10);
     goal_progress_publisher_ = this->create_publisher<std_msgs::msg::Float64>("goal_progress", 10);
 
     // Services
@@ -167,6 +173,7 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::Inertia>::SharedPtr center_of_mass_publisher_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr end_effector_pose_publisher_;
   rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr ee_wrench_publisher_;
+  rclcpp::Publisher<geometry_msgs::msg::Vector3Stamped>::SharedPtr ee_force_publisher_;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr goal_progress_publisher_;
 
   rclcpp_action::Server<hebi_msgs::action::ArmMotion>::SharedPtr action_server_;
@@ -178,6 +185,7 @@ private:
 
   std::shared_ptr<rclcpp::ParameterEventHandler> parameter_event_handler_;
   std::shared_ptr<rclcpp::ParameterCallbackHandle> ik_seed_callback_handle_;
+  std::shared_ptr<rclcpp::ParameterCallbackHandle> use_ik_seed_callback_handle_;
   std::shared_ptr<rclcpp::ParameterCallbackHandle> use_traj_times_callback_handle_;
   std::shared_ptr<rclcpp::ParameterCallbackHandle> compliant_mode_callback_handle_;
 
@@ -204,6 +212,17 @@ private:
       }
       RCLCPP_INFO(this->get_logger(), "Found and successfully updated 'ik_seed' parameter");
     }
+  }
+
+  void useIKSeedCallback(const rclcpp::Parameter & p) {
+    RCLCPP_INFO(
+      this->get_logger(), "Received an update to parameter \"%s\" of type '%s': %s",
+      p.get_name().c_str(),
+      p.get_type_name().c_str(),
+      p.as_bool() ? "true" : "false");
+
+    this->get_parameter("use_ik_seed", use_ik_seed_);
+    RCLCPP_INFO(this->get_logger(), "Found and successfully updated 'use_ik_seed' parameter to %s", use_ik_seed_ ? "true" : "false");
   }
 
   void useTrajTimesCallback(const rclcpp::Parameter & p) {
@@ -775,6 +794,12 @@ private:
     // Publish Raw End-Effector Wrench    
     Eigen::MatrixXd ee_jacobian;
     arm_->robotModel().getJacobianEndEffector(pos, ee_jacobian);
+
+    // Print a warning if the Jacobian is singular
+    if (abs(ee_jacobian.transpose().determinant()) < 1e-6) {
+      RCLCPP_WARN(this->get_logger(), "Jacobian is singular, end-effector wrench may not be accurate");
+    }
+
     // Calculate pseudo-inverse of J^T
     Eigen::MatrixXd ee_jacobian_t_pinv = ee_jacobian.transpose().completeOrthogonalDecomposition().pseudoInverse();
     // Calculate wrench as (J^T)^-1 * joint effort errors
@@ -792,6 +817,21 @@ private:
     ee_wrench_msg.wrench.torque.z = ee_wrench(5);
     
     ee_wrench_publisher_->publish(ee_wrench_msg);
+
+    // Calculate end-effector force based on end-effector position error
+    Eigen::Vector3d ee_pos_cmd;
+    Eigen::Matrix3d ee_orientation_cmd;
+    arm_->FK(fdbk.getPositionCommand(), ee_pos_cmd, ee_orientation_cmd);
+    Eigen::Vector3d pos_error = cur_pose - ee_pos_cmd;
+
+    geometry_msgs::msg::Vector3Stamped ee_force_msg;
+    ee_force_msg.header.stamp = this->now();
+    ee_force_msg.header.frame_id = "base_link";
+    ee_force_msg.vector.x = pos_error(0);
+    ee_force_msg.vector.y = pos_error(1);
+    ee_force_msg.vector.z = pos_error(2);
+
+    ee_force_publisher_->publish(ee_force_msg);
 
     // Publish Center of Mass
     auto& model = arm_->robotModel();
@@ -871,6 +911,12 @@ private:
 
     if(use_ik_seed_) {
       last_position = ik_seed_;
+    }
+    // Check if last_position contains NaN values
+    // If it does, we will use position feedback instead
+    else if (last_position.hasNaN()) {
+      RCLCPP_DEBUG(this->get_logger(), "Last position command contains NaN values, using last feedback position instead");
+      last_position = arm_->lastFeedback().getPosition();
     }
 
     int min_num_joints = 6;
@@ -1024,10 +1070,15 @@ private:
       }
       else {
         ik_seed_ = Eigen::Map<Eigen::VectorXd>(arm_config->getUserData().getFloatList("ik_seed_pos").data(), arm_config->getUserData().getFloatList("ik_seed_pos").size());
-        RCLCPP_INFO(this->get_logger(), "Found and successfully read 'ik_seed' parameter");
+        RCLCPP_INFO(this->get_logger(), "Found and successfully read 'ik_seed' parameter. Set `use_ik_seed` parameter to true to use it.");
       }
+    }
+
+    // Get the "use_ik_seed" parameter
+    if (this->has_parameter("use_ik_seed")) {
+      this->get_parameter("use_ik_seed", use_ik_seed_);
     } else {
-      RCLCPP_WARN(this->get_logger(), "\"ik_seed\" not provided in config file. Setting use_ik_seed to false.");
+      RCLCPP_WARN(this->get_logger(), "Could not find/read 'use_ik_seed' parameter; Setting use_ik_seed to false!");
       use_ik_seed_ = false;
     }
 
