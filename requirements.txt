@@ -1,0 +1,4 @@
+hebi-py
+scipy
+numpy
+lxml

@@ -53,6 +53,14 @@ colcon build --symlink-install
 source install/setup.bash
 ```
 
+(Optional) Install `pip` dependencies for HRDF to URDF conversion script:
+
+```bash
+pip install -r src/hebi_ros2_examples/requirements.txt
+```
+
+You can skip this step in case you decide not to use the script. For more details, refer to [URDF Generation](#urdf-generation) section.
+
 ## Robot Description
 
 For standalone control using the HEBI ROS 2 API, only an HRDF (HEBI Robot Description Format) file is required. See the [HEBI Documentation](https://docs.hebi.us/tools.html#robot-description-format) for a detailed explanation of the HRDF format.
