@@ -3,7 +3,7 @@ import rclpy
 from rclpy.node import Node
 from hebi_msgs.msg import SE3Jog
 from std_srvs.srv import Trigger
-from geometry_msgs.msg import WrenchStamped
+from geometry_msgs.msg import Vector3Stamped
 import numpy as np
 import time
 import threading
@@ -22,6 +22,7 @@ class DeviceState:
     jog_enabled: bool = False  # Toggle state for publishing jog commands
     transform: np.ndarray = field(default_factory=lambda: np.eye(4))
     force: list = field(default_factory=lambda: [0.0, 0.0, 0.0])  # Force command [x, y, z] in Newtons
+    joint_angles: np.ndarray = field(default_factory=lambda: np.zeros(6))  # Joint state for 6DOF haptic device
 
 # Global variables
 device_state = None
@@ -41,7 +42,7 @@ def hd_update():
         # Convert transform to numpy array and save to state
         device_state.transform = np.array(transform).T
         
-        # Set force from device state (updated by ROS node)
+        # Set force from device state
         hd.set_force(device_state.force)
         
         # Handle button states
@@ -49,6 +50,11 @@ def hd_update():
         device_state.stylus_button = bool(buttons & 1)  # Bit 0: stylus button
         device_state.extra_button = bool(buttons & 2)   # Bit 1: extra button
 
+        # Set joint angles
+        joints = np.array(hd.get_joints())
+        gimbals = np.array(hd.get_gimbals())
+        # Convert ctypes arrays to numpy arrays before concatenation
+        device_state.joint_angles = np.concatenate((joints, gimbals))
 
 class HapticROSNode(Node):
     """ROS2 node that publishes SE3 jog commands from haptic device"""
@@ -77,10 +83,10 @@ class HapticROSNode(Node):
         self.se3_jog_publisher = self.create_publisher(SE3Jog, f'{self.prefix}SE3_jog', 50)
         
         # Subscriber for end-effector wrench feedback
-        self.ee_wrench_subscriber = self.create_subscription(
-            WrenchStamped,
-            f'{self.prefix}ee_wrench',
-            self.ee_wrench_callback,
+        self.ee_force_subscriber = self.create_subscription(
+            Vector3Stamped,
+            f'{self.prefix}ee_force',
+            self.ee_force_callback,
             10
         )
         
@@ -93,6 +99,7 @@ class HapticROSNode(Node):
         # State variables
         self.last_haptic_position = np.zeros(3)
         self.last_haptic_rotation = np.eye(3)
+        self.last_joint_angles = np.zeros(6)
         
         # SE3 velocities
         self.x_vel = 0.0
@@ -105,9 +112,12 @@ class HapticROSNode(Node):
         # Low pass filter admittance
         self.low_pass_admittance = 0.05  # Adjust as needed for responsiveness
         
+        self.force_scale = 20.0
         # Low pass filter for force feedback
-        self.force_low_pass_admittance = 0.01  # Adjust as needed for force smoothness
+        self.force_low_pass_admittance = 0.95  # Adjust as needed for force smoothness
         self.filtered_force = np.array([0.0, 0.0, 0.0])  # Filtered force values
+
+        self.max_safe_joint_vel = 6.0
         
         self.get_logger().info("Started Haptic Device SE3 Jog Controller with Force Feedback")
         self.get_logger().info(f"Publishing SE3 jog commands on: {self.prefix}/SE3_jog" if self.prefix else "SE3_jog")
@@ -146,7 +156,7 @@ class HapticROSNode(Node):
         position = np.array([-transform[2, 3], -transform[0, 3], transform[1, 3]])
         
         # Apply coordinate transformation to fix rotation mapping
-        coord_transform = np.array([[0, 0, 1],
+        coord_transform = np.array([[0, 0, -1],
                                    [1, 0, 0],
                                    [0, -1, 0]])
         
@@ -155,11 +165,8 @@ class HapticROSNode(Node):
         
         return position, rotation
     
-    def calculate_jog_velocities(self):
+    def calculate_jog_velocities(self, haptic_position, haptic_rotation):
         """Calculate SE3 jog velocities from haptic device movement"""
-        # Get current haptic transform
-        haptic_position, haptic_rotation = self.extract_haptic_position_and_orientation()
-        
         # Calculate position delta
         delta_position = (haptic_position - self.last_haptic_position) * self.jog_scale[:3]
         
@@ -174,22 +181,18 @@ class HapticROSNode(Node):
         self.roll_vel += self.low_pass_admittance * (delta_euler[0] - self.roll_vel)
         self.pitch_vel += self.low_pass_admittance * (delta_euler[1] - self.pitch_vel)
         self.yaw_vel += self.low_pass_admittance * (delta_euler[2] - self.yaw_vel)
-
-        # Update last haptic state for next calculation
-        self.last_haptic_position = haptic_position.copy()
-        self.last_haptic_rotation = haptic_rotation.copy()
     
-    def ee_wrench_callback(self, msg):
+    def ee_force_callback(self, msg):
         """Callback for end-effector wrench feedback
         
         Args:
-            msg (WrenchStamped): Wrench message containing force and torque data
+            msg (Vector3Stamped): Wrench message containing force and torque data
         """
         # Extract force components from the wrench message
-        force_x = -msg.wrench.force.y * 1e-1
-        force_y = msg.wrench.force.z * 1e-1
-        force_z = -msg.wrench.force.x * 1e-1
-        
+        force_x = -msg.vector.y * self.force_scale
+        force_y = msg.vector.z * self.force_scale
+        force_z = -msg.vector.x * self.force_scale
+
         # Apply low-pass filtering to the force feedback
         raw_force = np.array([force_x, force_y, force_z])
         self.filtered_force += self.force_low_pass_admittance * (raw_force - self.filtered_force)
@@ -265,9 +268,9 @@ class HapticROSNode(Node):
         
         # Always disable jog after homing
         with device_lock:
-            if device_state is not None:
+            if device_state is not None and device_state.jog_enabled:
                 device_state.jog_enabled = False
-        print("Jog command publishing: DISABLED (after homing)")
+                print("Jog command publishing: DISABLED (after homing)")
     
     def timer_callback(self):
         """Main timer callback for publishing SE3 jog commands"""
@@ -296,31 +299,32 @@ class HapticROSNode(Node):
                     jog_enabled = device_state.jog_enabled
             print(f"Jog command publishing: {'ENABLED' if jog_enabled else 'DISABLED'}")
         
-        # Update last button states
+        # Update last button states and also get joint angles
         with device_lock:
             if device_state is not None:
                 device_state.last_stylus_button = stylus_button
                 device_state.last_extra_button = extra_button
+                joint_angles = device_state.joint_angles.copy()
 
-        # Check if jog was just enabled (transition from disabled to enabled)
-        if jog_enabled and not hasattr(self, '_last_jog_state'):
-            # First time or jog was just enabled - reset reference position
-            haptic_position, haptic_rotation = self.extract_haptic_position_and_orientation()
-            self.last_haptic_position = haptic_position.copy()
-            self.last_haptic_rotation = haptic_rotation.copy()
-        elif jog_enabled and hasattr(self, '_last_jog_state') and not self._last_jog_state:
-            # Jog was just re-enabled after being disabled - reset reference position
-            haptic_position, haptic_rotation = self.extract_haptic_position_and_orientation()
-            self.last_haptic_position = haptic_position.copy()
-            self.last_haptic_rotation = haptic_rotation.copy()
-        
-        # Store current jog state for next iteration
-        self._last_jog_state = jog_enabled
+        # Calculate joint velocities and update last joint angles
+        joint_velocities = (joint_angles - self.last_joint_angles) / self.dt
+        self.last_joint_angles = joint_angles.copy()
+
+        # SAFETY: Disable jog if joint velocities are too high
+        if jog_enabled and np.any(np.abs(joint_velocities) > self.max_safe_joint_vel):
+            with device_lock:
+                if device_state is not None:
+                    device_state.jog_enabled = False
+                    jog_enabled = False
+            print("Jog command publishing: DISABLED (joint velocity limit exceeded)")
+
+        # Get current haptic transform
+        haptic_position, haptic_rotation = self.extract_haptic_position_and_orientation()
         
         # Only process and publish if jog is enabled
         if jog_enabled:
             # Calculate jog velocities from haptic device movement
-            self.calculate_jog_velocities()
+            self.calculate_jog_velocities(haptic_position, haptic_rotation)
             
             # Publish SE3 jog commands (6DOF)
             self.publish_se3_jog()
@@ -339,6 +343,10 @@ class HapticROSNode(Node):
             
             # Clear force commands when jog is disabled
             self.clear_device_force()
+        
+        # Update last haptic state for next calculation
+        self.last_haptic_position = haptic_position.copy()
+        self.last_haptic_rotation = haptic_rotation.copy()
 
 def haptic_thread_function():
     """Function to run haptic device in separate thread"""
