@@ -99,12 +99,16 @@ gains:
   gripper: "gains/A-2080-01.xml"
 
 user_data:
-  # Default seed positions for doing inverse kinematics
+  # IK Seed positions for inverse kinematics
   ik_seed_pos: [0.01, 1.0, 2.5, 1.5, -1.5, 0.01]
-  home_position: [0.0, 2.09, 2.09, 0.0, 1.57, 0.0]
+
+  # Home Position
+  home_position: [0.0, 1.2, 1.8, 2.2, -1.57, 0.0]
 
   # Gripper specific settings
   has_gripper: true
+  gripper_family: "customGripperFamily"
+  gripper_name: "customGripperName"
   gripper_open_effort: 1
   gripper_close_effort: -5
 
@@ -131,9 +135,11 @@ plugins:
 
 Here are some key points to note:
 - The HEBI configuration files follow this naming convention: `<your_robot_name>.cfg.yaml` and placed in the `config/arms` directory within the `hebi_description` package
-- `names` and `families` of your modules can be found and changed using [HEBI Scope](https://docs.hebi.us/tools.html#scope-gui)
 - Ensure HRDF and gains file paths are relative to the config file
+- `names` and `families` of your modules can be found and changed using [HEBI Scope](https://docs.hebi.us/tools.html#scope-gui)
 - You can add `home_position` to `user_data` field for homing the arm on startup
+- The gripper family/name need not be added to the `names` and `families`. By default, the gripper module will be identified using the first string in your families list and with the name "gripperSpool"
+- For custom gripper family and name, you can specify them in the `user_data` field with keys `gripper_family` and `gripper_name` respectively
 
 ### Arm Node
 
@@ -169,7 +175,7 @@ The HEBI C++ API is wrapped in ROS 2 within the `arm_node` (`src/kits/arms/arm_n
 - *ik_seed*: Sets the IK seed for inverse kinematic calculations
 - *use_ik_seed*: When set to true, the node uses the IK seed specified by the `ik_seed` parameter for inverse kinematics calculations. If false, it uses the most recent joint feedback position as the IK seed.
 
-**NOTE:** The `config_package`, `config_file` and `prefix` parameters are set during launch and should not be changed during runtime. On the other hand, `compliant_mode` and `ik_seed` are dynamic parameters.
+**NOTE:** The `config_package`, `config_file` and `prefix` parameters are set during launch and should not be changed during runtime. On the other hand, `compliant_mode`, `ik_seed` and `use_ik_seed` are dynamic parameters.
 
 ### Launching the Arm Node
 
@@ -268,6 +274,7 @@ This file defines hardware interfaces and plugins for your robot. The template b
         <xacro:unless value="${use_mock_hardware or sim_gazebo_classic or sim_gazebo}">     <!-- sim_gazebo_classic not applicable in ROS 2 Jazzy -->
           <param name="config_pkg">${config_pkg}</param>
           <param name="config_file">${config_file}</param>
+          <param name="gripper_joint_name">${prefix}<end_effector_name></param>    <!-- If you have a gripper -->
           <plugin>hebi_hardware/HEBIHardwareInterface</plugin>
         </xacro:unless>
       </hardware>
@@ -301,7 +308,7 @@ This file defines hardware interfaces and plugins for your robot. The template b
           <param name="initial_value">0.0</param>
         </state_interface>
       </joint>
-      <joint name="${prefix}<end_effector_name>"> <!-- If you have a gripper -->
+      <joint name="${prefix}<end_effector_name>">    <!-- If you have a gripper -->
         <command_interface name="position" />
         <command_interface name="velocity" />
         <state_interface name="position">
@@ -325,7 +332,7 @@ This file defines hardware interfaces and plugins for your robot. The template b
 ```
 **NOTE**: The gazebo classic and ignition plugins sections differ with each ROS version. Please refer to example files provided.
 
-According to conventions, this file should be named as `<your_robot_name>.ros2_control.xacro` and placed in `urdf/kits/ros2_control` folder of the `hebi_decription` package.
+According to the package conventions, this file should be named as `<your_robot_name>.ros2_control.xacro` and placed in `urdf/kits/ros2_control` folder of the `hebi_decription` package.
 
 ### ROS 2 Control URDF 
 
@@ -369,13 +376,13 @@ This file combines the ROS2 control macro with the main robot URDF. Here's a tem
 </robot>
 ```
 
-According to conventions, this file should be named as `<your_robot_name>.urdf.xacro` and placed in `urdf/kits/ros2_control` folder of the `hebi_decription` package.
+According to the package conventions, this file should be named as `<your_robot_name>.urdf.xacro` and placed in `urdf/kits/ros2_control` folder of the `hebi_decription` package.
 
 ### ROS2 Control Parameter File
 
 This YAML file configures the controllers used with your robot. Refer to the [ROS2 Controllers Documentation](https://control.ros.org/rolling/doc/ros2_controllers/doc/controllers_index.html#controllers-for-manipulators-and-other-robots) for detailed information.
 
-Here's an example parameter file for the A-2580-06 arm:
+Here's an example parameter file for the A-2580-06G arm:
 ```
 controller_manager:
   ros__parameters:
@@ -386,6 +393,9 @@ controller_manager:
 
     hebi_arm_controller:
       type: joint_trajectory_controller/JointTrajectoryController
+    
+    gripper_controller:
+      type: position_controllers/GripperActionController
 
 hebi_arm_controller:
   ros__parameters:
@@ -412,7 +422,15 @@ hebi_arm_controller:
     constraints:
       stopped_velocity_tolerance: 0.01 # Defaults to 0.01
       goal_time: 0.0 # Defaults to 0.0 (start immediately)
+
+gripper_controller:
+  ros__parameters:
+    joint: end_effector_1/input_l_finger
+    state_publish_rate: 50.0 # Defaults to 50
+    action_monitor_rate: 20.0 # Defaults to 20
 ```
+
+If your arm does not include a gripper, you can omit the `gripper_controller` section from the configuration file.
 
 ### Launching HEBI Arm with ROS 2 Control
 
@@ -421,7 +439,7 @@ hebi_arm_controller:
 To launch the ROS 2 Control node with real hardware:
 
 ```bash
-ros2 launch hebi_bringup bringup_arm.launch.py hebi_arm:=<your_robot_name> use_mock_hardware:=false
+ros2 launch hebi_bringup bringup_arm.launch.py hebi_arm:=<your_robot_name> use_mock_hardware:=false use_gripper:=true/false
 ```
 
 #### Simulated Execution
@@ -437,9 +455,17 @@ ros2 launch hebi_bringup bringup_arm.launch.py hebi_arm:=<your_robot_name>
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `hebi_arm` | (required) | Name of the robot to use |
-| `use_mock_hardware` | `true` | Use mock hardware interface instead of real hardware |
+| `prefix` | `""` | Namespace for topics and prefix for joint names |
+| `description_package` | `hebi_description` | Package containing the robot description files |
+| `description_file` | `urdf/kits/ros2_control/<hebi_arm>.urdf.xacro` | Path to robot description file relative to `description_package` |
 | `config_pkg` | `hebi_description` | Package containing the config file |
 | `config_file_path` | `config/<hebi_arm>.cfg.yaml` | Path to config file relative to config_pkg |
+| `controllers_package` | `hebi_bringup` | Package containing the controller parameter file |
+| `controllers_file` | `config/<hebi_arm>_controllers.yaml` | Path to controller parameter file relative to `controllers_package` |
+| `use_mock_hardware` | `true` | Use mock hardware interface instead of real hardware |
+| `mock_sensor_commands` | `false` | Enable mock sensor commands (only applicable when `use_mock_hardware` is true) |
+| `robot_controller` | `hebi_arm_controller` | Name of the robot controller to use |
+| `use_gripper` | `false` | Whether to include a gripper controller in the setup |
 | `use_rviz` | `true` | Launch RViz for visualization |
 
 Here's an example to launch A-2580-06 arm with mock hardware:
