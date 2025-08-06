@@ -5,7 +5,7 @@
 #include <sensor_msgs/msg/joy.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <std_msgs/msg/bool.hpp>
-#include <std_srvs/srv/empty.hpp>
+#include <std_srvs/srv/trigger.hpp>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -49,7 +49,7 @@ public:
     joint_state_subscriber_ = this->create_subscription<sensor_msgs::msg::JointState>(prefix_ + "/joint_states", 10, std::bind(&JoystickNode::get_num_joints, this, std::placeholders::_1));
 
     // Home Service Client
-    home_client_ = this->create_client<std_srvs::srv::Empty>("home");
+    home_client_ = this->create_client<std_srvs::srv::Trigger>("home");
 
     // Initialize last button press time
     last_button_press_time_ = this->now();
@@ -65,7 +65,7 @@ private:
   rclcpp::Publisher<hebi_msgs::msg::SE3Jog>::SharedPtr SE3_jog_publisher_;
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_subscriber_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_subscriber_;
-  rclcpp::Client<std_srvs::srv::Empty>::SharedPtr home_client_;
+  rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr home_client_;
 
   // Initialize controller state
   sensor_msgs::msg::Joy controller_state_;
@@ -204,7 +204,7 @@ private:
 
   void go_home()
   {
-    auto request = std::make_shared<std_srvs::srv::Empty::Request>();
+    auto request = std::make_shared<std_srvs::srv::Trigger::Request>();
     // Wait for the service to be available
     int try_count = 0;
     while (!home_client_->wait_for_service(std::chrono::seconds(1)))

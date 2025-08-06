@@ -64,11 +64,11 @@ class HapticROSNode(Node):
         
         # Declare parameters
         self.declare_parameter('prefix', '/')
-        self.declare_parameter('rate', 200.0)
-        self.declare_parameter('jog_scale', [0.005, 0.005, 0.005, 5.0, 5.0, 5.0])  # [x, y, z, roll, pitch, yaw]
+        self.declare_parameter('rate', 500.0)
+        self.declare_parameter('jog_scale', [0.002, 0.002, 0.002, 1.0, 1.0, 1.0])  # [x, y, z, roll, pitch, yaw]
         self.declare_parameter('max_force', [4.0, 4.0, 4.0])  # Maximum force in each axis [x, y, z] in Newtons
-        self.declare_parameter('tanh_constant', 5.0)  # Constant for tanh force scaling
-        self.declare_parameter('dead_zone', 1.0)  # Dead zone for force feedback
+        self.declare_parameter('tanh_constant', 1.5)  # Constant for tanh force scaling
+        self.declare_parameter('dead_zone', 1.2)  # Dead zone for force feedback
         
         # Get parameters
         self.prefix = self.get_parameter('prefix').get_parameter_value().string_value
@@ -110,14 +110,14 @@ class HapticROSNode(Node):
         self.yaw_vel = 0.0
         
         # Low pass filter admittance
-        self.low_pass_admittance = 0.05  # Adjust as needed for responsiveness
+        self.low_pass_admittance = 1.0  # Adjust as needed for responsiveness
         
         self.force_scale = 20.0
         # Low pass filter for force feedback
         self.force_low_pass_admittance = 0.95  # Adjust as needed for force smoothness
         self.filtered_force = np.array([0.0, 0.0, 0.0])  # Filtered force values
 
-        self.max_safe_joint_vel = 6.0
+        self.max_safe_joint_vel = 100.0
         
         self.get_logger().info("Started Haptic Device SE3 Jog Controller with Force Feedback")
         self.get_logger().info(f"Publishing SE3 jog commands on: {self.prefix}/SE3_jog" if self.prefix else "SE3_jog")
@@ -247,7 +247,7 @@ class HapticROSNode(Node):
         msg.dpitch = self.pitch_vel
         msg.dyaw = self.yaw_vel
         
-        msg.duration = 5 * self.dt
+        msg.duration = 0.3
         
         self.se3_jog_publisher.publish(msg)
     

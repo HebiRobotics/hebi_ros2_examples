@@ -167,6 +167,10 @@ private:
   sensor_msgs::msg::JointState state_msg_;
   geometry_msgs::msg::Inertia center_of_mass_message_;
 
+  Eigen::Vector3d target_xyz {Eigen::Vector3d::Constant(0.0)};
+  Eigen::Matrix3d target_rotmat {Eigen::Matrix3d::Identity()};
+  double max_target_radius_{1.0};
+
   bool has_active_topic_commands_{false};
   std::string active_command_topic_;
   double last_active_command_time_{0.0};
@@ -565,6 +569,11 @@ private:
       RCLCPP_ERROR_STREAM(this->get_logger(), "Arm is currently receiving topic commands at " << active_command_topic_ << ", ignoring " << topic_name);
       return false;
     }
+    
+    if (!has_active_topic_commands_) {
+      // Set the target position to current position before starting a new command
+      arm_->FK(arm_->lastFeedback().getPositionCommand(), target_xyz, target_rotmat);
+    }
 
     // Set the active command topic and time
     active_command_topic_ = topic_name;
@@ -699,29 +708,26 @@ private:
     if (!checkArmConditions("cartesian_jog"))
       return;
 
+    Eigen::VectorXd times(1);
+    times(0) = jog_msg->duration;
+
     // Get current position and orientation
     // (We use the last position command for smoother motion)
-    Eigen::Vector3d cur_pos;
+    Eigen::Vector3d cur_pos;  // Not used
     Eigen::Matrix3d cur_orientation;
     arm_->FK(arm_->lastFeedback().getPositionCommand(), cur_pos, cur_orientation);
 
     // Convert orientation to Euler angles
-    Eigen::Vector3d cur_euler = cur_orientation.eulerAngles(0, 1, 2);
+    Eigen::Matrix3Xd cur_euler = cur_orientation.eulerAngles(0, 1, 2);
 
-    Eigen::Matrix3Xd xyz_positions(3, 1);
-    Eigen::Matrix3Xd euler_angles(3, 1);
-    Eigen::VectorXd times(1);
-
-    times(0) = jog_msg->duration;
-    xyz_positions(0, 0) = cur_pos[0] + jog_msg->dx;
-    xyz_positions(1, 0) = cur_pos[1] + jog_msg->dy;
-    xyz_positions(2, 0) = cur_pos[2] + jog_msg->dz;
-    euler_angles(0, 0) = cur_euler[0];
-    euler_angles(1, 0) = cur_euler[1];
-    euler_angles(2, 0) = cur_euler[2];
+    target_xyz[0] += jog_msg->dx;
+    target_xyz[1] += jog_msg->dy;
+    target_xyz[2] += jog_msg->dz;
+    // Limit the target position to be within the maximum radius
+    target_xyz *= std::min(1.0, max_target_radius_ / target_xyz.norm());
 
     // Replan
-    updateSE3Waypoints(use_traj_times_, times, xyz_positions, &euler_angles, true);
+    updateSE3Waypoints(use_traj_times_, times, target_xyz, &cur_euler, true);
   }
 
   // "Jog" the target end effector location in SE(3), replanning
@@ -732,35 +738,30 @@ private:
     if (!checkArmConditions("SE3_jog"))
       return;
 
-    // Get current position and orientation
-    // (We use the last position command for smoother motion)
-    Eigen::Vector3d cur_pos;
-    Eigen::Matrix3d cur_orientation, new_orientation;
-    arm_->FK(arm_->lastFeedback().getPositionCommand(), cur_pos, cur_orientation);
-
-    Eigen::Matrix3Xd xyz_positions(3, 1);
-    Eigen::Matrix3Xd euler_angles(3, 1);
     Eigen::VectorXd times(1);
+    times(0) = jog_msg->duration;
 
     // Calculate the new end-effector orientation
     // World frame's X-axis is End-effector frame's Z-axis: Roll
     // World frame's Y-axis is End-effector frame's X-axis: Pitch
     // World frame's Z-axis is End-effector frame's Y-axis: Yaw
     // In our convention, yaw is global (extrinsic) and roll is local (intrinsic), with respect to the end-effector frame
-    times(0) = jog_msg->duration;
-    new_orientation = cur_orientation
-                      * Eigen::AngleAxisd(jog_msg->dyaw, Eigen::Vector3d::UnitY()).matrix()   // Yaw
-                      * Eigen::AngleAxisd(jog_msg->dpitch, Eigen::Vector3d::UnitX()).matrix() // Pitch
-                      * Eigen::AngleAxisd(jog_msg->droll, Eigen::Vector3d::UnitZ()).matrix(); // Roll
+    target_rotmat = target_rotmat
+                    * Eigen::AngleAxisd(jog_msg->dyaw, Eigen::Vector3d::UnitY()).matrix()   // Yaw
+                    * Eigen::AngleAxisd(jog_msg->dpitch, Eigen::Vector3d::UnitX()).matrix() // Pitch
+                    * Eigen::AngleAxisd(jog_msg->droll, Eigen::Vector3d::UnitZ()).matrix(); // Roll
 
-    euler_angles = new_orientation.eulerAngles(0, 1, 2);
+    // Convert orientation to Euler angles
+    Eigen::Matrix3Xd euler_angles = target_rotmat.eulerAngles(0, 1, 2);
 
-    xyz_positions(0, 0) = cur_pos[0] + jog_msg->dx; // x
-    xyz_positions(1, 0) = cur_pos[1] + jog_msg->dy; // y
-    xyz_positions(2, 0) = cur_pos[2] + jog_msg->dz; // z
+    target_xyz[0] += jog_msg->dx;
+    target_xyz[1] += jog_msg->dy;
+    target_xyz[2] += jog_msg->dz;
+    // Limit the target position to be within the maximum radius
+    target_xyz *= std::min(1.0, max_target_radius_ / target_xyz.norm());
 
     // Replan
-    updateSE3Waypoints(use_traj_times_, times, xyz_positions, &euler_angles, false);
+    updateSE3Waypoints(use_traj_times_, times, target_xyz, &euler_angles, false);
   }
 
   // Control the wrench at the end-effector
