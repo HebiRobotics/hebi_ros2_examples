@@ -154,11 +154,12 @@ The HEBI C++ API is wrapped in ROS 2 within the `arm_node` (`src/kits/arms/arm_n
 - */cmd_ee_wrench [geometry_msgs/msg/Wrench]*: Command end effector wrench (force and torque) in the base frame
 
 **Publishers**
-- */ee_pose [geometry_msgs/msg/PoseStamped]*: End effector pose in SE3 space
 - */joint_states [sensor_msgs/msg/JointState]*: Joint angles of the arm
-- */inertia [geometry_msgs/msg/Inertia]*: Inertia of the arm
+- */ee_pose [geometry_msgs/msg/PoseStamped]*: End effector pose in SE3 space
 - */ee_wrench [geometry_msgs/msg/WrenchStamped]*: End effector wrench (force and torque) feedback in the base frame, calculated from torque errors
 - */ee_force [geometry_msgs/msg/Vector3Stamped]*: End effector force (X, Y, Z components only), computed from the end effector position error. No scaling factor is applied; the output directly reflects the position errors.
+- */inertia [geometry_msgs/msg/Inertia]*: Inertia of the arm
+- */goal_progress [std_msgs/msg/Float64]*: Progress of the current goal of the arm (0.0 to 1.0)
 
 **Action Servers**
 - */arm_motion [hebi_msgs/action/ArmMotion]*: Command an arm trajectory in either joint space or SE3 space
@@ -174,8 +175,10 @@ The HEBI C++ API is wrapped in ROS 2 within the `arm_node` (`src/kits/arms/arm_n
 - *compliant_mode*: When true, disables arm goals and sets joint efforts to zero for manual movement
 - *ik_seed*: Sets the IK seed for inverse kinematic calculations
 - *use_ik_seed*: When set to true, the node uses the IK seed specified by the `ik_seed` parameter for inverse kinematics calculations. If false, it uses the most recent joint feedback position as the IK seed.
+- *use_traj_times*: When set to true, the node uses the trajectory times specified by the `traj_times` parameter for trajectory execution. If false, it uses a default time based on a heuristic.
+- *topic_command_timeout*: Timeout in seconds for active topic commands. If no topic command is received within this time, the node resets the active command state, allowing new commands from actions or other topics.
 
-**NOTE:** The `config_package`, `config_file` and `prefix` parameters are set during launch and should not be changed during runtime. On the other hand, `compliant_mode`, `ik_seed` and `use_ik_seed` are dynamic parameters.
+**NOTE:** The `config_package`, `config_file` and `prefix` parameters are set during launch and should not be changed during runtime. On the other hand, `compliant_mode`, `ik_seed`, `use_ik_seed`, `use_traj_times`, and `topic_command_timeout` are dynamic parameters.
 
 ### Launching the Arm Node
 

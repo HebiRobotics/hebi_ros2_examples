@@ -44,6 +44,7 @@ public:
     auto ik_seed_des = rcl_interfaces::msg::ParameterDescriptor{};
     auto use_ik_seed_des = rcl_interfaces::msg::ParameterDescriptor{};
     auto use_traj_times_des = rcl_interfaces::msg::ParameterDescriptor{};
+    auto topic_command_timeout_des = rcl_interfaces::msg::ParameterDescriptor{};
     auto compliant_mode_des = rcl_interfaces::msg::ParameterDescriptor{};
 
     config_file_des.description = "Config file for the arm of type .cfg.yaml.";
@@ -51,7 +52,8 @@ public:
     prefix_des.description = "Prefix for the arm.";
     ik_seed_des.description = "Seed for inverse kinematics. Can be changed during runtime.";
     use_ik_seed_des.description = "Use the stored IK seed position. Can be changed during runtime.";
-    use_traj_times_des.description = "Can be changed during runtime.";
+    use_traj_times_des.description = "Use trajectory times specified in the trajectory messages. If false, a default time is used based on a heuristic. Can be changed during runtime.";
+    topic_command_timeout_des.description = "Timeout for topic commands in seconds. If no new command is received within this time, the arm will resume accepting commands from actions or other topics. Can be changed during runtime.";
     compliant_mode_des.description = "No arm motion can be commanded in compliant mode. Can be changed during runtime.";
 
     // Declare default parameter values
@@ -61,11 +63,13 @@ public:
     this->declare_parameter("ik_seed", rclcpp::PARAMETER_DOUBLE_ARRAY);
     this->declare_parameter("use_ik_seed", false);
     this->declare_parameter("use_traj_times", true);
+    this->declare_parameter("topic_command_timeout", 1.0);
     this->declare_parameter("compliant_mode", false);
 
     // Get the parameters that are passed into the node
     config_package_ = this->get_parameter("config_package").as_string();
     config_file_ = this->get_parameter("config_file").as_string();
+    topic_command_timeout_s_ = this->get_parameter("topic_command_timeout").as_double();
 
     // Initialize the arm with configs
     if (!initializeArm()) {
@@ -80,6 +84,7 @@ public:
     ik_seed_callback_handle_ = parameter_event_handler_->add_parameter_callback("ik_seed", std::bind(&ArmNode::ikSeedCallback, this, std::placeholders::_1));
     use_ik_seed_callback_handle_ = parameter_event_handler_->add_parameter_callback("use_ik_seed", std::bind(&ArmNode::useIKSeedCallback, this, std::placeholders::_1));
     use_traj_times_callback_handle_ = parameter_event_handler_->add_parameter_callback("use_traj_times", std::bind(&ArmNode::useTrajTimesCallback, this, std::placeholders::_1));
+    topic_command_timeout_callback_handle_ = parameter_event_handler_->add_parameter_callback("topic_command_timeout", std::bind(&ArmNode::topicCommandTimeoutCallback, this, std::placeholders::_1));
     compliant_mode_callback_handle_ = parameter_event_handler_->add_parameter_callback("compliant_mode", std::bind(&ArmNode::compliantModeCallback, this, std::placeholders::_1));
 
     // Subscribers
@@ -162,6 +167,15 @@ private:
   sensor_msgs::msg::JointState state_msg_;
   geometry_msgs::msg::Inertia center_of_mass_message_;
 
+  Eigen::Vector3d target_xyz {Eigen::Vector3d::Constant(0.0)};
+  Eigen::Matrix3d target_rotmat {Eigen::Matrix3d::Identity()};
+  double max_target_radius_{1.0};
+
+  bool has_active_topic_commands_{false};
+  std::string active_command_topic_;
+  double last_active_command_time_{0.0};
+  double topic_command_timeout_s_{1.0};
+
   rclcpp::Subscription<control_msgs::msg::JointJog>::SharedPtr joint_jog_subscriber_;
   rclcpp::Subscription<hebi_msgs::msg::SE3Jog>::SharedPtr cartesian_jog_subscriber_;
   rclcpp::Subscription<hebi_msgs::msg::SE3Jog>::SharedPtr SE3_jog_subscriber_;
@@ -188,6 +202,7 @@ private:
   std::shared_ptr<rclcpp::ParameterCallbackHandle> use_ik_seed_callback_handle_;
   std::shared_ptr<rclcpp::ParameterCallbackHandle> use_traj_times_callback_handle_;
   std::shared_ptr<rclcpp::ParameterCallbackHandle> compliant_mode_callback_handle_;
+  std::shared_ptr<rclcpp::ParameterCallbackHandle> topic_command_timeout_callback_handle_;
 
   ////////////////////// PARAMETER CALLBACK FUNCTIONS //////////////////////
   void ikSeedCallback(const rclcpp::Parameter & p) {
@@ -234,6 +249,17 @@ private:
 
     this->get_parameter("use_traj_times", use_traj_times_);
     RCLCPP_INFO(this->get_logger(), "Found and successfully updated 'use_traj_times' parameter to %s", use_traj_times_ ? "true" : "false");
+  }
+
+  void topicCommandTimeoutCallback(const rclcpp::Parameter & p) {
+    RCLCPP_INFO(
+      this->get_logger(), "Received an update to parameter \"%s\" of type '%s': %f",
+      p.get_name().c_str(),
+      p.get_type_name().c_str(),
+      p.as_double());
+
+    this->get_parameter("topic_command_timeout", topic_command_timeout_s_);
+    RCLCPP_INFO(this->get_logger(), "Found and successfully updated 'topic_command_timeout' parameter to %f seconds", topic_command_timeout_s_);
   }
 
   void compliantModeCallback(const rclcpp::Parameter & p) {
@@ -285,6 +311,10 @@ private:
     }
     if (is_homing_) {
       RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - arm is currently homing!");
+      return rclcpp_action::GoalResponse::REJECT;
+    }
+    if (has_active_topic_commands_) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - arm is currently receiving topic commands!");
       return rclcpp_action::GoalResponse::REJECT;
     }
     if (goal->wp_type != ArmMotion::Goal::CARTESIAN_SPACE && goal->wp_type != ArmMotion::Goal::JOINT_SPACE) {
@@ -535,6 +565,21 @@ private:
       return false;
     }
 
+    if (has_active_topic_commands_ && active_command_topic_ != topic_name) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Arm is currently receiving topic commands at " << active_command_topic_ << ", ignoring " << topic_name);
+      return false;
+    }
+    
+    if (!has_active_topic_commands_) {
+      // Set the target position to current position before starting a new command
+      arm_->FK(arm_->lastFeedback().getPositionCommand(), target_xyz, target_rotmat);
+    }
+
+    // Set the active command topic and time
+    active_command_topic_ = topic_name;
+    last_active_command_time_ = this->now().seconds();
+    has_active_topic_commands_ = true;
+
     return true;
   }
 
@@ -663,29 +708,26 @@ private:
     if (!checkArmConditions("cartesian_jog"))
       return;
 
+    Eigen::VectorXd times(1);
+    times(0) = jog_msg->duration;
+
     // Get current position and orientation
     // (We use the last position command for smoother motion)
-    Eigen::Vector3d cur_pos;
+    Eigen::Vector3d cur_pos;  // Not used
     Eigen::Matrix3d cur_orientation;
     arm_->FK(arm_->lastFeedback().getPositionCommand(), cur_pos, cur_orientation);
 
     // Convert orientation to Euler angles
-    Eigen::Vector3d cur_euler = cur_orientation.eulerAngles(0, 1, 2);
+    Eigen::Matrix3Xd cur_euler = cur_orientation.eulerAngles(0, 1, 2);
 
-    Eigen::Matrix3Xd xyz_positions(3, 1);
-    Eigen::Matrix3Xd euler_angles(3, 1);
-    Eigen::VectorXd times(1);
-
-    times(0) = jog_msg->duration;
-    xyz_positions(0, 0) = cur_pos[0] + jog_msg->dx;
-    xyz_positions(1, 0) = cur_pos[1] + jog_msg->dy;
-    xyz_positions(2, 0) = cur_pos[2] + jog_msg->dz;
-    euler_angles(0, 0) = cur_euler[0];
-    euler_angles(1, 0) = cur_euler[1];
-    euler_angles(2, 0) = cur_euler[2];
+    target_xyz[0] += jog_msg->dx;
+    target_xyz[1] += jog_msg->dy;
+    target_xyz[2] += jog_msg->dz;
+    // Limit the target position to be within the maximum radius
+    target_xyz *= std::min(1.0, max_target_radius_ / target_xyz.norm());
 
     // Replan
-    updateSE3Waypoints(use_traj_times_, times, xyz_positions, &euler_angles, true);
+    updateSE3Waypoints(use_traj_times_, times, target_xyz, &cur_euler, true);
   }
 
   // "Jog" the target end effector location in SE(3), replanning
@@ -696,35 +738,30 @@ private:
     if (!checkArmConditions("SE3_jog"))
       return;
 
-    // Get current position and orientation
-    // (We use the last position command for smoother motion)
-    Eigen::Vector3d cur_pos;
-    Eigen::Matrix3d cur_orientation, new_orientation;
-    arm_->FK(arm_->lastFeedback().getPositionCommand(), cur_pos, cur_orientation);
-
-    Eigen::Matrix3Xd xyz_positions(3, 1);
-    Eigen::Matrix3Xd euler_angles(3, 1);
     Eigen::VectorXd times(1);
+    times(0) = jog_msg->duration;
 
     // Calculate the new end-effector orientation
     // World frame's X-axis is End-effector frame's Z-axis: Roll
     // World frame's Y-axis is End-effector frame's X-axis: Pitch
     // World frame's Z-axis is End-effector frame's Y-axis: Yaw
     // In our convention, yaw is global (extrinsic) and roll is local (intrinsic), with respect to the end-effector frame
-    times(0) = jog_msg->duration;
-    new_orientation = cur_orientation
-                      * Eigen::AngleAxisd(jog_msg->dyaw, Eigen::Vector3d::UnitY()).matrix()   // Yaw
-                      * Eigen::AngleAxisd(jog_msg->dpitch, Eigen::Vector3d::UnitX()).matrix() // Pitch
-                      * Eigen::AngleAxisd(jog_msg->droll, Eigen::Vector3d::UnitZ()).matrix(); // Roll
+    target_rotmat = target_rotmat
+                    * Eigen::AngleAxisd(jog_msg->dyaw, Eigen::Vector3d::UnitY()).matrix()   // Yaw
+                    * Eigen::AngleAxisd(jog_msg->dpitch, Eigen::Vector3d::UnitX()).matrix() // Pitch
+                    * Eigen::AngleAxisd(jog_msg->droll, Eigen::Vector3d::UnitZ()).matrix(); // Roll
 
-    euler_angles = new_orientation.eulerAngles(0, 1, 2);
+    // Convert orientation to Euler angles
+    Eigen::Matrix3Xd euler_angles = target_rotmat.eulerAngles(0, 1, 2);
 
-    xyz_positions(0, 0) = cur_pos[0] + jog_msg->dx; // x
-    xyz_positions(1, 0) = cur_pos[1] + jog_msg->dy; // y
-    xyz_positions(2, 0) = cur_pos[2] + jog_msg->dz; // z
+    target_xyz[0] += jog_msg->dx;
+    target_xyz[1] += jog_msg->dy;
+    target_xyz[2] += jog_msg->dz;
+    // Limit the target position to be within the maximum radius
+    target_xyz *= std::min(1.0, max_target_radius_ / target_xyz.norm());
 
     // Replan
-    updateSE3Waypoints(use_traj_times_, times, xyz_positions, &euler_angles, false);
+    updateSE3Waypoints(use_traj_times_, times, target_xyz, &euler_angles, false);
   }
 
   // Control the wrench at the end-effector
@@ -861,6 +898,13 @@ private:
     std_msgs::msg::Float64 goal_progress_msg;
     goal_progress_msg.data = arm_->goalProgress();
     goal_progress_publisher_->publish(goal_progress_msg);
+
+    // Reset active command state
+    if (this->now().seconds() - last_active_command_time_ > topic_command_timeout_s_) {
+      has_active_topic_commands_ = false;
+      active_command_topic_ = "";
+      last_active_command_time_ = 0.0;
+    }
   }
 
   void setColor(const Color& color) {
