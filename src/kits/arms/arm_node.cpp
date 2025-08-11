@@ -1076,8 +1076,6 @@ private:
 
     // Create arm from config
     arm_ = arm::Arm::create(*arm_config);
-    arm_->update();
-
     // Terminate if arm not found
     if (!arm_) {
       RCLCPP_ERROR(this->get_logger(), "Failed to create arm!");
@@ -1085,6 +1083,7 @@ private:
     }
     RCLCPP_INFO(this->get_logger(), "Arm connected.");
     num_joints_ = arm_->size();
+    arm_->update();
 
     // Check if home position is provided
     if (arm_config->getUserData().hasFloatList("home_position")) {
