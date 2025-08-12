@@ -5,6 +5,7 @@
 #include <control_msgs/msg/joint_jog.hpp>
 #include <hebi_msgs/msg/se3_jog.hpp>
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
+#include <hebi_msgs/msg/se3_trajectory.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <geometry_msgs/msg/inertia.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
@@ -93,8 +94,8 @@ public:
     joint_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("joint_jog", 10, std::bind(&ArmNode::jointJogCallback, this, std::placeholders::_1));
     cartesian_jog_subscriber_ = this->create_subscription<hebi_msgs::msg::SE3Jog>("cartesian_jog", 10, std::bind(&ArmNode::cartesianJogCallback, this, std::placeholders::_1));
     SE3_jog_subscriber_ = this->create_subscription<hebi_msgs::msg::SE3Jog>("SE3_jog", 10, std::bind(&ArmNode::SE3JogCallback, this, std::placeholders::_1));
-    joint_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("joint_trajectory", 10, std::bind(&ArmNode::jointWaypointsCallback, this, std::placeholders::_1));
-    cartesian_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("cartesian_trajectory", 10, std::bind(&ArmNode::cartesianWaypointsCallback, this, std::placeholders::_1));
+    joint_trajectory_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("joint_trajectory", 10, std::bind(&ArmNode::jointTrajectoryCallback, this, std::placeholders::_1));
+    cartesian_trajectory_subscriber_ = this->create_subscription<hebi_msgs::msg::SE3Trajectory>("cartesian_trajectory", 10, std::bind(&ArmNode::cartesianTrajectoryCallback, this, std::placeholders::_1));
     cmd_ee_wrench_subscriber_ = this->create_subscription<geometry_msgs::msg::Wrench>("cmd_ee_wrench", 10, std::bind(&ArmNode::wrenchCommandCallback, this, std::placeholders::_1));
     if (use_gripper_) {
       gripper_command_subscriber_ = this->create_subscription<std_msgs::msg::Float64>("cmd_gripper", 10, std::bind(&ArmNode::gripperCommandCallback, this, std::placeholders::_1));
@@ -148,11 +149,6 @@ public:
       // Send command
       if (!arm_->send())
         RCLCPP_WARN(this->get_logger(), "Error Sending Commands -- Check Connection");
-      if (gripper_) {
-        if (!gripper_->send()) {
-          RCLCPP_WARN(this->get_logger(), "Error Sending Gripper Commands -- Check Connection");
-        }
-      }
     }
   }
 
@@ -173,7 +169,8 @@ private:
   
   Eigen::VectorXd cmd_joint_effort_{ Eigen::VectorXd::Zero(6) };
   
-  int num_joints_;
+  int num_joints_{0};
+  int num_grippers_{0};
 
   Eigen::VectorXd ik_seed_{ Eigen::VectorXd::Constant(6, std::numeric_limits<double>::quiet_NaN()) };
   bool use_ik_seed_{false};
@@ -198,13 +195,13 @@ private:
   double topic_command_timeout_s_{1.0};
 
   bool use_gripper_{false};
-  std::unique_ptr<hebi::arm::Gripper> gripper_;
+  std::shared_ptr<hebi::arm::Gripper> gripper_;
 
   rclcpp::Subscription<control_msgs::msg::JointJog>::SharedPtr joint_jog_subscriber_;
   rclcpp::Subscription<hebi_msgs::msg::SE3Jog>::SharedPtr cartesian_jog_subscriber_;
   rclcpp::Subscription<hebi_msgs::msg::SE3Jog>::SharedPtr SE3_jog_subscriber_;
-  rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr cartesian_waypoint_subscriber_;
-  rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr joint_waypoint_subscriber_;
+  rclcpp::Subscription<hebi_msgs::msg::SE3Trajectory>::SharedPtr cartesian_trajectory_subscriber_;
+  rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr joint_trajectory_subscriber_;
   rclcpp::Subscription<geometry_msgs::msg::Wrench>::SharedPtr cmd_ee_wrench_subscriber_;
   rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr gripper_command_subscriber_;
 
@@ -615,27 +612,22 @@ private:
       RCLCPP_ERROR(this->get_logger(), "Arm is not initialized yet!");
       return false;
     }
-
     if (compliant_mode_) {
       RCLCPP_ERROR_STREAM(this->get_logger(), "Arm in compliant mode, ignoring " << topic_name);
       return false;
     }
-
     if (has_active_action_) {
       RCLCPP_ERROR_STREAM(this->get_logger(), "Arm is executing an action, ignoring " << topic_name);
       return false;
     }
-
     if (is_homing_) {
       RCLCPP_ERROR_STREAM(this->get_logger(), "Arm is currently homing, ignoring " << topic_name);
       return false;
     }
-
     if (has_active_topic_commands_ && active_command_topic_ != topic_name) {
       RCLCPP_ERROR_STREAM(this->get_logger(), "Arm is currently receiving topic commands at " << active_command_topic_ << ", ignoring " << topic_name);
       return false;
     }
-    
     if (!has_active_topic_commands_) {
       // Set the target position to current position before starting a new command
       arm_->FK(arm_->lastFeedback().getPositionCommand(), target_xyz, target_rotmat);
@@ -650,7 +642,7 @@ private:
   }
 
   // Callback for trajectories with joint angle waypoints
-  void jointWaypointsCallback(const trajectory_msgs::msg::JointTrajectory::SharedPtr joint_trajectory) {
+  void jointTrajectoryCallback(const trajectory_msgs::msg::JointTrajectory::SharedPtr joint_trajectory) {
 
     if (!checkArmConditions("joint_trajectory"))
       return;
@@ -661,21 +653,31 @@ private:
     }
 
     // Print length of trajectory
-    RCLCPP_INFO_STREAM(this->get_logger(), "Received trajectory with " << joint_trajectory->points.size() << " waypoints");
+    RCLCPP_INFO_STREAM(this->get_logger(), "Received joint trajectory with " << joint_trajectory->points.size() << " waypoints");
 
     auto num_waypoints = joint_trajectory->points.size();
+    Eigen::VectorXd times(num_waypoints);
     Eigen::MatrixXd pos(num_joints_, num_waypoints);
     Eigen::MatrixXd vel(num_joints_, num_waypoints);
     Eigen::MatrixXd accel(num_joints_, num_waypoints);
-    Eigen::VectorXd times(num_waypoints);
+    Eigen::MatrixXd gripper_states(num_grippers_, num_waypoints);
 
     for (size_t waypoint = 0; waypoint < num_waypoints; ++waypoint) {
       auto& cmd_waypoint = joint_trajectory->points[waypoint];
 
-      if (cmd_waypoint.positions.size() != static_cast<size_t>(num_joints_) ||
-          cmd_waypoint.velocities.size() != static_cast<size_t>(num_joints_) ||
-          cmd_waypoint.accelerations.size() != static_cast<size_t>(num_joints_)) {
-        RCLCPP_ERROR_STREAM(this->get_logger(), "Position, velocity, and acceleration sizes not correct for waypoint index " << waypoint);
+      if (cmd_waypoint.positions.size() != static_cast<size_t>(num_joints_ + num_grippers_)) {
+        RCLCPP_ERROR_STREAM(this->get_logger(), "Position size not correct for waypoint index " << waypoint
+                            << ", got " << cmd_waypoint.positions.size() << " (should be " << num_joints_ + num_grippers_ << ")");
+        return;
+      }
+      if (cmd_waypoint.velocities.size() != static_cast<size_t>(num_joints_ + num_grippers_)) {
+        RCLCPP_ERROR_STREAM(this->get_logger(), "Velocity size not correct for waypoint index " << waypoint
+                            << ", got " << cmd_waypoint.velocities.size() << " (should be " << num_joints_ + num_grippers_ << ")");
+        return;
+      }
+      if (cmd_waypoint.accelerations.size() != static_cast<size_t>(num_joints_ + num_grippers_)) {
+        RCLCPP_ERROR_STREAM(this->get_logger(), "Acceleration size not correct for waypoint index " << waypoint
+                            << ", got " << cmd_waypoint.accelerations.size() << " (should be " << num_joints_ + num_grippers_ << ")");
         return;
       }
 
@@ -690,12 +692,15 @@ private:
       }
 
       times(waypoint) = cmd_waypoint.time_from_start.sec + cmd_waypoint.time_from_start.nanosec * 1e-9;
+
+      if (gripper_)
+        gripper_states(0, waypoint) = cmd_waypoint.positions[num_joints_];  // Assuming gripper is the last joint
     }
-    updateJointWaypoints(true, times, pos, vel, accel);
+    updateJointWaypoints(true, times, pos, vel, accel, gripper_states, gripper_ != nullptr);
   }
 
   // Callback for trajectories with cartesian position waypoints
-  void cartesianWaypointsCallback(const trajectory_msgs::msg::JointTrajectory::SharedPtr target_waypoints) {
+  void cartesianTrajectoryCallback(const hebi_msgs::msg::SE3Trajectory::SharedPtr target_waypoints) {
 
     if (!checkArmConditions("cartesian_trajectory"))
       return;
@@ -705,23 +710,29 @@ private:
       return;
     }
 
+    // Print length of trajectory
+    RCLCPP_INFO_STREAM(this->get_logger(), "Received cartesian trajectory with " << target_waypoints->points.size() << " waypoints");
+
     // Fill in an Eigen::Matrix3xd with the xyz goal
     size_t num_waypoints = target_waypoints->points.size();
+    Eigen::VectorXd times(num_waypoints);
     Eigen::Matrix3Xd xyz_positions(3, num_waypoints);
     Eigen::Matrix3Xd euler_angles(3, num_waypoints);
-    Eigen::VectorXd times(num_waypoints);
+    Eigen::MatrixXd gripper_states(1, num_waypoints);
     for (size_t i = 0; i < num_waypoints; ++i) {
       times(i) = target_waypoints->points[i].time_from_start.sec + target_waypoints->points[i].time_from_start.nanosec * 1e-9;
-      xyz_positions(0, i) = target_waypoints->points[i].positions[0];
-      xyz_positions(1, i) = target_waypoints->points[i].positions[1];
-      xyz_positions(2, i) = target_waypoints->points[i].positions[2];
-      euler_angles(0, i) = target_waypoints->points[i].positions[3];
-      euler_angles(1, i) = target_waypoints->points[i].positions[4];
-      euler_angles(2, i) = target_waypoints->points[i].positions[5];
+      xyz_positions(0, i) = target_waypoints->points[i].x;
+      xyz_positions(1, i) = target_waypoints->points[i].y;
+      xyz_positions(2, i) = target_waypoints->points[i].z;
+      euler_angles(0, i) = target_waypoints->points[i].roll;
+      euler_angles(1, i) = target_waypoints->points[i].pitch;
+      euler_angles(2, i) = target_waypoints->points[i].yaw;
+      if (gripper_)
+        gripper_states(0, i) = target_waypoints->points[i].gripper;
     }
 
     // Replan
-    updateSE3Waypoints(use_traj_times_, times, xyz_positions, &euler_angles, true);
+    updateSE3Waypoints(use_traj_times_, times, xyz_positions, &euler_angles, true, gripper_states, gripper_ != nullptr);
   }
 
   // "Jog" the arm along each joint
@@ -874,11 +885,9 @@ private:
     const auto vel = fdbk.getVelocity();
     const auto eff = fdbk.getEffort();
 
-    const int gripper_size = use_gripper_ ? 1 : 0;
-
-    state_msg_.position.resize(pos.size() + gripper_size);
-    state_msg_.velocity.resize(vel.size() + gripper_size);
-    state_msg_.effort.resize(eff.size() + gripper_size);
+    state_msg_.position.resize(pos.size() + num_grippers_);
+    state_msg_.velocity.resize(vel.size() + num_grippers_);
+    state_msg_.effort.resize(eff.size() + num_grippers_);
     state_msg_.header.stamp = this->now();
     state_msg_.header.frame_id = "base_link";
 
@@ -886,7 +895,7 @@ private:
     Eigen::VectorXd::Map(&state_msg_.velocity[0], vel.size()) = vel;
     Eigen::VectorXd::Map(&state_msg_.effort[0], eff.size()) = eff;
 
-    if (use_gripper_) {
+    if (gripper_) {
       state_msg_.position.back() = gripper_->getState();
       state_msg_.velocity.back() = std::numeric_limits<double>::quiet_NaN(); // Gripper velocity not available
       state_msg_.effort.back() = std::numeric_limits<double>::quiet_NaN(); // Gripper effort not available
@@ -895,7 +904,7 @@ private:
     arm_state_pub_->publish(state_msg_);
 
     // Publish Gripper State
-    if (use_gripper_) {
+    if (gripper_) {
       gripper_state_msg_.data = gripper_->getState();
       gripper_state_publisher_->publish(gripper_state_msg_);
     }
@@ -1001,25 +1010,60 @@ private:
     }
   }
 
+  bool isValidTimes(const Eigen::VectorXd& times) {
+    // Check if the times vector is empty
+    if (times.size() == 0) {
+      RCLCPP_ERROR(this->get_logger(), "Times vector is empty");
+      return false;
+    }
+
+    // Check if all times are non-negative
+    const double epsilon = 1e-2; // Small value to consider as zero
+    for (size_t i = 0; i < times.size(); ++i) {
+      if (times(i) < 0.0) {
+        RCLCPP_ERROR_STREAM(this->get_logger(), "Negative time value at index " << i << ": " << times(i));
+        return false;
+      }
+      if (i > 0 && times(i) - times(i - 1) < epsilon) {
+        RCLCPP_ERROR_STREAM(this->get_logger(), "Times vector is not monotonically increasing at index " << i << ": " << times(i) << " < " << times(i - 1));
+        return false;
+      }
+    }
+
+    return true;
+  }
+
   // Each row is a separate joint; each column is a separate waypoint.
-  void updateJointWaypoints(const bool use_traj_times, const Eigen::VectorXd& times, const Eigen::MatrixXd& angles, const Eigen::MatrixXd& velocities, const Eigen::MatrixXd& accelerations) {
+  void updateJointWaypoints(const bool use_traj_times, const Eigen::VectorXd& times, const Eigen::MatrixXd& positions, const Eigen::MatrixXd& velocities, const Eigen::MatrixXd& accelerations, const Eigen::MatrixXd& gripper_states = Eigen::MatrixXd(), bool use_gripper_states = false) {
     // Data sanity check:
-    if (angles.rows() != velocities.rows()                    || // Number of joints
-        angles.rows() != accelerations.rows()                 ||
-        angles.rows() != static_cast<long int>(arm_->size())  ||
-        angles.cols() != velocities.cols()                    || // Number of waypoints
-        angles.cols() != accelerations.cols()                 ||
-        angles.cols() != times.size()                         ||
-        angles.cols() == 0) {
-      RCLCPP_ERROR(this->get_logger(), "Angles, velocities, accelerations, or times were not the correct size");
+    if (!isValidTimes(times)) {
+      RCLCPP_ERROR(this->get_logger(), "Invalid times vector provided");
+      return;
+    }
+    if (positions.rows() != velocities.rows()                        || // Number of joints
+        positions.rows() != accelerations.rows()                     ||
+        positions.rows() != static_cast<long int>(arm_->size())      ||
+        positions.cols() != velocities.cols()                        || // Number of waypoints
+        positions.cols() != accelerations.cols()                     ||
+        positions.cols() != times.size()                             ||
+        positions.cols() == 0                                        ||
+        (gripper_states.size() != times.size() && use_gripper_states)
+      ) {
+      RCLCPP_ERROR(this->get_logger(), "Positions, velocities, accelerations, times, or gripper states were not the correct size");
       return;
     }
 
     // Replan:
     if (use_traj_times) {
-      arm_->setGoal(arm::Goal::createFromWaypoints(times, angles, velocities, accelerations));
+      if (use_gripper_states)
+        arm_->setGoal(arm::Goal::createFromWaypointsWithAux(times, positions, velocities, accelerations, gripper_states));
+      else
+        arm_->setGoal(arm::Goal::createFromWaypoints(times, positions, velocities, accelerations));
     } else {
-      arm_->setGoal(arm::Goal::createFromWaypoints(angles, velocities, accelerations));
+      if (use_gripper_states)
+        arm_->setGoal(arm::Goal::createFromWaypointsWithAux(positions, velocities, accelerations, gripper_states));
+      else
+        arm_->setGoal(arm::Goal::createFromWaypoints(positions, velocities, accelerations));
     }
   }
   
@@ -1027,8 +1071,12 @@ private:
   // Replan a smooth joint trajectory from the current location through a
   // series of cartesian waypoints.
   // xyz positions should be a 3xn vector of target positions
-  void updateSE3Waypoints(const bool use_traj_times, const Eigen::VectorXd& times, const Eigen::Matrix3Xd& xyz_positions, const Eigen::Matrix3Xd* euler_angles = nullptr, const bool pureCartesian = false) {
+  void updateSE3Waypoints(const bool use_traj_times, const Eigen::VectorXd& times, const Eigen::Matrix3Xd& xyz_positions, const Eigen::Matrix3Xd* euler_angles = nullptr, const bool pureCartesian = false, const Eigen::MatrixXd& gripper_states = Eigen::MatrixXd(), bool use_gripper_states = false) {
     // Data sanity check:
+    if (!isValidTimes(times)) {
+      RCLCPP_ERROR(this->get_logger(), "Invalid times vector provided");
+      return;
+    }
     if (euler_angles && euler_angles->cols() != xyz_positions.cols())
       return;
 
@@ -1050,15 +1098,12 @@ private:
       last_position = arm_->lastFeedback().getPosition();
     }
 
-    int min_num_joints = 6;
-    if(pureCartesian)
-    {
-      min_num_joints = 3;
-    }
+    int min_num_joints_required = 6;
+    if(pureCartesian) min_num_joints_required = 3;
 
     // For each waypoint, find the joint angles to move to it, starting from the last
     // waypoint, and save into the position vector.
-    if (euler_angles && num_joints_ >= min_num_joints) {
+    if (euler_angles && num_joints_ >= min_num_joints_required) {
       // If we are given tip directions, add these too...
       for (size_t i = 0; i < static_cast<size_t>(num_waypoints); ++i) {
 
@@ -1102,11 +1147,23 @@ private:
       }
     }
 
+    Eigen::MatrixXd nan_matrix(positions.rows(), positions.cols());
+    nan_matrix.setConstant(std::numeric_limits<double>::quiet_NaN());
+    nan_matrix.rightCols<1>().setZero();
+
     // Replan:
-    if (use_traj_times)
-      arm_->setGoal(arm::Goal::createFromPositions(times, positions));
-    else
-      arm_->setGoal(arm::Goal::createFromPositions(positions));
+    if (use_traj_times) {
+      if (use_gripper_states)
+        arm_->setGoal(arm::Goal::createFromWaypointsWithAux(times, positions, nan_matrix, nan_matrix, gripper_states));
+      else
+        arm_->setGoal(arm::Goal::createFromWaypoints(times, positions, nan_matrix, nan_matrix));
+    }
+    else {
+      if (use_gripper_states)
+        arm_->setGoal(arm::Goal::createFromWaypointsWithAux(positions, nan_matrix, nan_matrix, gripper_states));
+      else
+        arm_->setGoal(arm::Goal::createFromWaypoints(positions, nan_matrix, nan_matrix));
+    }
   }
 
   void homeArm() {
@@ -1304,6 +1361,9 @@ private:
       if (!gripper_->send()) {
         RCLCPP_WARN(this->get_logger(), "Could not send gripper command! Please check connection");
       }
+      
+      arm_->setEndEffector(gripper_);
+      num_grippers_ = 1;
     }
 
     // Make a list of family/actuator formatted names for the JointState publisher
@@ -1311,7 +1371,7 @@ private:
     for (size_t idx = 0; idx < arm_config->getNames().size(); ++idx) {
       full_names.push_back(prefix + arm_config->getNames().at(idx));
     }
-    if (use_gripper_) {
+    if (gripper_) {
       full_names.push_back(prefix + gripper_name); // Add gripper name to the list
     }
     // TODO: Figure out a way to get link names from the arm, so it doesn't need to be input separately

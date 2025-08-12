@@ -147,10 +147,10 @@ The HEBI C++ API is wrapped in ROS 2 within the `arm_node` (`src/kits/arms/arm_n
 
 **Subscribers**
 - */SE3_jog [hebi_msgs/msg/SE3Jog]*: Command end effector jog in SE3 space (cartesian and rotation)
-- */cartesian_jog [hebi_msgs/msg/SE3Jog]*: Command end effector jog in cartesian space (x, y, z). Any angular displacement values set in the message are ignored.
-- */cartesian_trajectory [trajectory_msgs/msg/JointTrajectory]*: Command a trajectory for the end effector in cartesian space
+- */cartesian_jog [hebi_msgs/msg/SE3Jog]*: Command end effector jog in cartesian space (x, y, z). Any angular displacement values set in the message are ignored
+- */cartesian_trajectory [hebi_msgs/msg/SE3Trajectory]*: Command a trajectory for the end effector in SE3 or Cartesian space, optionally including gripper states if applicable.
 - */joint_jog [control_msgs/msg/JointJog]*: Command jog in joint angles
-- */joint_trajectory [trajectory_msgs/msg/JointTrajectory]*: Command a trajectory in joint angles
+- */joint_trajectory [trajectory_msgs/msg/JointTrajectory]*: Commands a trajectory in joint space. If a gripper is present, its state can be included as the last joint in the trajectory.
 - */cmd_ee_wrench [geometry_msgs/msg/Wrench]*: Command end effector wrench (force and torque) in the base frame
 - */cmd_gripper [std_msgs/msg/Float64]*: Command gripper position (0 for fully open, 1 for fully closed)
 
@@ -216,10 +216,11 @@ Both `arm.launch.py` and `arm_joystick_teleop.launch.py` include a parameter to 
 To get you started, we have provided several example scripts that use the `arm_node`:
 
 1. `move_arm.cpp`: A C++ example that publishes a predefined trajectory using the `arm_motion` action
-2. `ex_publish_trajectory.py`: A Python example that publishes a predefined trajectory to the `/joint_trajectory` topic
-3. `ex_teach_repeat_mobileio.py`: Uses HEBI Mobile IO to record and play trajectories, or go to saved waypoints
-4. `ex_teleop_mobileio.py`: Uses HEBI Mobile IO to send jog commands to control the arm in real-time
-5. `ex_haptic_teleop_node.py`: Uses a 3D Systems Touch X haptic device to control the arm in real-time with haptic feedback by sending jog commands while receiving force feedback from the `ee_wrench` topic
+2. `ex_publish_joint_trajectory.py`: A Python example that publishes a predefined sinusoidal trajectory to the `/joint_trajectory` topic, moving the base joint
+3. `ex_publish_cartesian_trajectory.py`: A Python example that publishes a predefined rectangular trajectory in the Y-Z plane to the `/cartesian_trajectory` topic
+4. `ex_teach_repeat_mobileio.py`: Uses HEBI Mobile IO to record and play trajectories, or go to saved waypoints
+5. `ex_teleop_mobileio.py`: Uses HEBI Mobile IO to send jog commands to control the arm in real-time
+6. `ex_haptic_teleop_node.py`: Uses a 3D Systems Touch X haptic device to control the arm in real-time with haptic feedback by sending jog commands while receiving force feedback from the `ee_wrench` topic
 
 ## ROS2 Control
 

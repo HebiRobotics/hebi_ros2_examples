@@ -163,7 +163,8 @@ ament_python_install_package(${PROJECT_NAME})
 
 # Install python executables
 install(PROGRAMS
-  scripts/ex_publish_trajectory.py
+  scripts/ex_publish_joint_trajectory.py
+  scripts/ex_publish_cartesian_trajectory.py
   scripts/ex_teach_repeat_mobileio.py
   scripts/ex_teleop_mobileio.py
   scripts/ex_haptic_teleop_node.py
