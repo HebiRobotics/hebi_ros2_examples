@@ -154,7 +154,7 @@ The HEBI C++ API is wrapped in ROS 2 within the `arm_node` (`src/kits/arms/arm_n
 - */cmd_ee_wrench [geometry_msgs/msg/Wrench]*: Command end effector wrench (force and torque) in the base frame
 
 **Publishers**
-- */joint_states [sensor_msgs/msg/JointState]*: Joint angles of the arm
+- */joint_states [sensor_msgs/msg/JointState]*: Joint angles of the arm and, if present, the gripper state (ranging from 0 for fully open to 1 for fully closed)
 - */ee_pose [geometry_msgs/msg/PoseStamped]*: End effector pose in SE3 space
 - */ee_wrench [geometry_msgs/msg/WrenchStamped]*: End effector wrench (force and torque) feedback in the base frame, calculated from torque errors
 - */ee_force [geometry_msgs/msg/Vector3Stamped]*: End effector force (X, Y, Z components only), computed from the end effector position error. No scaling factor is applied; the output directly reflects the position errors.
@@ -172,13 +172,14 @@ The HEBI C++ API is wrapped in ROS 2 within the `arm_node` (`src/kits/arms/arm_n
 - *config_package*: ROS package containing the config file
 - *config_file*: Config file path relative to `config_package`
 - *prefix*: Namespace for topics and prefix for joint names in `/joint_states`
+- *use_gripper*: When true, enables gripper support. Ensure that the `has_gripper` parameter in the `user_data` section of your config file is also set to true.
 - *compliant_mode*: When true, disables arm goals and sets joint efforts to zero for manual movement
 - *ik_seed*: Sets the IK seed for inverse kinematic calculations
 - *use_ik_seed*: When set to true, the node uses the IK seed specified by the `ik_seed` parameter for inverse kinematics calculations. If false, it uses the most recent joint feedback position as the IK seed.
 - *use_traj_times*: When set to true, the node uses the trajectory times specified by the `traj_times` parameter for trajectory execution. If false, it uses a default time based on a heuristic.
 - *topic_command_timeout*: Timeout in seconds for active topic commands. If no topic command is received within this time, the node resets the active command state, allowing new commands from actions or other topics.
 
-**NOTE:** The `config_package`, `config_file` and `prefix` parameters are set during launch and should not be changed during runtime. On the other hand, `compliant_mode`, `ik_seed`, `use_ik_seed`, `use_traj_times`, and `topic_command_timeout` are dynamic parameters.
+**NOTE:** The `config_package`, `config_file`, `prefix`, and `use_gripper` parameters are set during launch and should not be changed during runtime. On the other hand, `compliant_mode`, `ik_seed`, `use_ik_seed`, `use_traj_times`, and `topic_command_timeout` are dynamic parameters.
 
 ### Launching the Arm Node
 
@@ -196,6 +197,7 @@ ros2 launch hebi_ros2_examples arm.launch.py hebi_arm:=<your_robot_name>
 | `config_package` | `hebi_description` | ROS package containing the config file |
 | `config_file` | `<your_robot_name>.cfg.yaml` | Config file path relative to `config_package` |
 | `prefix` | `""` | Namespace for topics and prefix for joint names |
+| `use_gripper` | `false` | Whether to use the gripper (if available) |
 | `use_rviz` | `true` | Whether to start RViz |
 | `generate_urdf` | `true` | Generate URDF from HRDF or use pre-existing one |
 

@@ -39,6 +39,7 @@ public:
     auto config_file_des = rcl_interfaces::msg::ParameterDescriptor{};
     auto config_package_des = rcl_interfaces::msg::ParameterDescriptor{};
     auto prefix_des = rcl_interfaces::msg::ParameterDescriptor{};
+    auto use_gripper_des = rcl_interfaces::msg::ParameterDescriptor{};
 
     // Parameters passed through config file changed during runtime
     auto ik_seed_des = rcl_interfaces::msg::ParameterDescriptor{};
@@ -50,6 +51,7 @@ public:
     config_file_des.description = "Config file for the arm of type .cfg.yaml.";
     config_package_des.description = "Package containg the config file.";
     prefix_des.description = "Prefix for the arm.";
+    use_gripper_des.description = "Use the gripper if available. If false, the gripper will not be used even if it is available.";
     ik_seed_des.description = "Seed for inverse kinematics. Can be changed during runtime.";
     use_ik_seed_des.description = "Use the stored IK seed position. Can be changed during runtime.";
     use_traj_times_des.description = "Use trajectory times specified in the trajectory messages. If false, a default time is used based on a heuristic. Can be changed during runtime.";
@@ -60,6 +62,7 @@ public:
     this->declare_parameter("config_file", "", config_file_des);
     this->declare_parameter("config_package", "", config_package_des);
     this->declare_parameter("prefix", "", prefix_des);
+    this->declare_parameter("use_gripper", false, use_gripper_des);
     this->declare_parameter("ik_seed", std::vector<double>(6, std::numeric_limits<double>::quiet_NaN()), ik_seed_des);
     this->declare_parameter("use_ik_seed", false, use_ik_seed_des);
     this->declare_parameter("use_traj_times", true, use_traj_times_des);
@@ -70,6 +73,7 @@ public:
     config_package_ = this->get_parameter("config_package").as_string();
     config_file_ = this->get_parameter("config_file").as_string();
     topic_command_timeout_s_ = this->get_parameter("topic_command_timeout").as_double();
+    use_gripper_ = this->get_parameter("use_gripper").as_bool();
 
     // Initialize the arm with configs
     if (!initializeArm()) return;
@@ -134,6 +138,11 @@ public:
       // Send command
       if (!arm_->send())
         RCLCPP_WARN(this->get_logger(), "Error Sending Commands -- Check Connection");
+      if (gripper_) {
+        if (!gripper_->send()) {
+          RCLCPP_WARN(this->get_logger(), "Error Sending Gripper Commands -- Check Connection");
+        }
+      }
     }
   }
 
@@ -172,6 +181,9 @@ private:
   std::string active_command_topic_;
   double last_active_command_time_{0.0};
   double topic_command_timeout_s_{1.0};
+
+  bool use_gripper_{false};
+  std::unique_ptr<hebi::arm::Gripper> gripper_;
 
   rclcpp::Subscription<control_msgs::msg::JointJog>::SharedPtr joint_jog_subscriber_;
   rclcpp::Subscription<hebi_msgs::msg::SE3Jog>::SharedPtr cartesian_jog_subscriber_;
@@ -814,15 +826,23 @@ private:
     const auto vel = fdbk.getVelocity();
     const auto eff = fdbk.getEffort();
 
-    state_msg_.position.resize(pos.size());
-    state_msg_.velocity.resize(vel.size());
-    state_msg_.effort.resize(eff.size());
+    const int gripper_size = use_gripper_ ? 1 : 0;
+
+    state_msg_.position.resize(pos.size() + gripper_size);
+    state_msg_.velocity.resize(vel.size() + gripper_size);
+    state_msg_.effort.resize(eff.size() + gripper_size);
     state_msg_.header.stamp = this->now();
     state_msg_.header.frame_id = "base_link";
 
     Eigen::VectorXd::Map(&state_msg_.position[0], pos.size()) = pos;
     Eigen::VectorXd::Map(&state_msg_.velocity[0], vel.size()) = vel;
     Eigen::VectorXd::Map(&state_msg_.effort[0], eff.size()) = eff;
+
+    if (use_gripper_) {
+      state_msg_.position.back() = gripper_->getState();
+      state_msg_.velocity.back() = std::numeric_limits<double>::quiet_NaN(); // Gripper velocity not available
+      state_msg_.effort.back() = std::numeric_limits<double>::quiet_NaN(); // Gripper effort not available
+    }
 
     arm_state_pub_->publish(state_msg_);
 
@@ -1067,7 +1087,7 @@ private:
     if (is_homing_) is_homing_ = false; // If we were homing, stop the homing process
   }
 
-  /////////////////// Initialize arm ///////////////////
+  /////////////////// Initialize arm and gripper ///////////////////
   bool initializeArm() {
 
     // Validate the configuration before proceeding
@@ -1174,10 +1194,75 @@ private:
       this->get_parameter("prefix", prefix);
     }
 
+    // Create gripper if requested
+    std::string gripper_name = "gripperSpool";  // Kept outside the if statement to use it later in state_msg names
+    if (use_gripper_) {
+      // Get the "has_gripper" parameter
+      if (!arm_config_user_data.hasBool("has_gripper")) {
+        RCLCPP_WARN(this->get_logger(), "Gripper not configured in the arm config file, ignoring gripper commands");
+        use_gripper_ = false;
+        return true; // No gripper to initialize
+      }
+      if (!arm_config_user_data.getBool("has_gripper")) {
+        RCLCPP_WARN(this->get_logger(), "`has_gripper` is set to false in the arm config file, ignoring gripper commands");
+        use_gripper_ = false;
+        return true; // No gripper to initialize
+      }
+
+      std::string gripper_family = arm_config->getFamilies()[0];
+      if (arm_config_user_data.hasString("gripper_family")) {
+        gripper_family = arm_config_user_data.getString("gripper_family");
+      }
+      if (arm_config_user_data.hasString("gripper_name")) {
+        gripper_name = arm_config_user_data.getString("gripper_name");
+      }
+      double gripper_close_effort = 1.0;
+      if (arm_config_user_data.hasFloat("gripper_close_effort")) {
+        gripper_close_effort = arm_config_user_data.getFloat("gripper_close_effort");
+      }
+      double gripper_open_effort = -5.0;
+      if (arm_config_user_data.hasFloat("gripper_open_effort")) {
+        gripper_open_effort = arm_config_user_data.getFloat("gripper_open_effort");
+      }
+
+      // Create gripper from config
+      gripper_ = arm::Gripper::create(
+        gripper_family,
+        gripper_name,
+        gripper_close_effort,
+        gripper_open_effort
+      );
+
+      if (!gripper_) {
+        RCLCPP_ERROR(this->get_logger(), "Failed to create gripper! Please check if the gripper is available on the network and the config file is correct.");
+        return false;
+      }
+      RCLCPP_INFO(this->get_logger(), "Gripper connected.");
+
+      std::string gripper_gains_file = arm_config->getGains("gripper");
+      if (!gripper_gains_file.empty()) {
+        RCLCPP_INFO(this->get_logger(), "Loading gripper gains from: %s", gripper_gains_file.c_str());
+        if (gripper_->loadGains(gripper_gains_file)) {
+          RCLCPP_INFO(this->get_logger(), "Gripper gains loaded successfully.");
+        } else {
+          RCLCPP_ERROR(this->get_logger(), "Failed to load gripper gains");
+          return false;
+        }
+      }
+
+      gripper_->open(); // Open the gripper by default
+      if (!gripper_->send()) {
+        RCLCPP_WARN(this->get_logger(), "Could not send gripper command! Please check connection");
+      }
+    }
+
     // Make a list of family/actuator formatted names for the JointState publisher
     std::vector<std::string> full_names;
     for (size_t idx = 0; idx < arm_config->getNames().size(); ++idx) {
       full_names.push_back(prefix + arm_config->getNames().at(idx));
+    }
+    if (use_gripper_) {
+      full_names.push_back(prefix + gripper_name); // Add gripper name to the list
     }
     // TODO: Figure out a way to get link names from the arm, so it doesn't need to be input separately
     state_msg_.name = full_names;

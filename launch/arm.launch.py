@@ -22,6 +22,11 @@ def generate_launch_description():
             description="Prefix for the HEBI Arm name."
         ),
         DeclareLaunchArgument(
+            "use_gripper",
+            default_value="false",
+            description="Whether to use the gripper."
+        ),
+        DeclareLaunchArgument(
             "use_rviz",
             default_value="true",
             description="Whether to start RViz."
@@ -55,6 +60,7 @@ def generate_launch_description():
     description_package = LaunchConfiguration("description_package")
     config_package = LaunchConfiguration("config_package")
     config_file = LaunchConfiguration("config_file")
+    use_gripper = LaunchConfiguration("use_gripper")
     use_rviz = LaunchConfiguration("use_rviz")
     generate_urdf = LaunchConfiguration("generate_urdf")
 
@@ -121,6 +127,7 @@ def generate_launch_description():
             {"config_package": config_package},
             {"config_file": config_file},
             {"prefix": prefix},
+            {"use_gripper": use_gripper},
         ],
         namespace=prefix,
     )
