@@ -152,12 +152,14 @@ The HEBI C++ API is wrapped in ROS 2 within the `arm_node` (`src/kits/arms/arm_n
 - */joint_jog [control_msgs/msg/JointJog]*: Command jog in joint angles
 - */joint_trajectory [trajectory_msgs/msg/JointTrajectory]*: Command a trajectory in joint angles
 - */cmd_ee_wrench [geometry_msgs/msg/Wrench]*: Command end effector wrench (force and torque) in the base frame
+- */cmd_gripper [std_msgs/msg/Float64]*: Command gripper position (0 for fully open, 1 for fully closed)
 
 **Publishers**
 - */joint_states [sensor_msgs/msg/JointState]*: Joint angles of the arm and, if present, the gripper state (ranging from 0 for fully open to 1 for fully closed)
 - */ee_pose [geometry_msgs/msg/PoseStamped]*: End effector pose in SE3 space
 - */ee_wrench [geometry_msgs/msg/WrenchStamped]*: End effector wrench (force and torque) feedback in the base frame, calculated from torque errors
 - */ee_force [geometry_msgs/msg/Vector3Stamped]*: End effector force (X, Y, Z components only), computed from the end effector position error. No scaling factor is applied; the output directly reflects the position errors.
+- */gripper_state [std_msgs/msg/Float64]*: Gripper state (0 for fully open, 1 for fully closed)
 - */inertia [geometry_msgs/msg/Inertia]*: Inertia of the arm
 - */goal_progress [std_msgs/msg/Float64]*: Progress of the current goal of the arm (0.0 to 1.0)
 
@@ -167,6 +169,7 @@ The HEBI C++ API is wrapped in ROS 2 within the `arm_node` (`src/kits/arms/arm_n
 **Services**
 - */home [std_srvs/srv/Trigger]*: Home the arm
 - */stop [std_srvs/srv/Trigger]*: Stop arm motion (cannot stop action execution; cancel the action instead)
+- */gripper [std_srvs/srv/SetBool]*: Opens or closes the gripper (if available). Set to `true` to close the gripper and `false` to open it.
 
 **Parameters**
 - *config_package*: ROS package containing the config file

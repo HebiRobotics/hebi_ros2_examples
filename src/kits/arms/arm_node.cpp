@@ -14,6 +14,7 @@
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float64.hpp>
 #include <std_srvs/srv/trigger.hpp>
+#include <std_srvs/srv/set_bool.hpp>
 #include <hebi_msgs/action/arm_motion.hpp>
 
 #include "hebi_cpp_api/group_command.hpp"
@@ -95,6 +96,9 @@ public:
     joint_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("joint_trajectory", 10, std::bind(&ArmNode::jointWaypointsCallback, this, std::placeholders::_1));
     cartesian_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("cartesian_trajectory", 10, std::bind(&ArmNode::cartesianWaypointsCallback, this, std::placeholders::_1));
     cmd_ee_wrench_subscriber_ = this->create_subscription<geometry_msgs::msg::Wrench>("cmd_ee_wrench", 10, std::bind(&ArmNode::wrenchCommandCallback, this, std::placeholders::_1));
+    if (use_gripper_) {
+      gripper_command_subscriber_ = this->create_subscription<std_msgs::msg::Float64>("cmd_gripper", 10, std::bind(&ArmNode::gripperCommandCallback, this, std::placeholders::_1));
+    }
 
     // Publishers
     arm_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("joint_states", 10);
@@ -103,10 +107,16 @@ public:
     ee_wrench_publisher_ = this->create_publisher<geometry_msgs::msg::WrenchStamped>("ee_wrench", 10);
     ee_force_publisher_ = this->create_publisher<geometry_msgs::msg::Vector3Stamped>("ee_force", 10);
     goal_progress_publisher_ = this->create_publisher<std_msgs::msg::Float64>("goal_progress", 10);
+    if (use_gripper_) {
+      gripper_state_publisher_ = this->create_publisher<std_msgs::msg::Float64>("gripper_state", 10);
+    }
 
     // Services
     home_service_ = this->create_service<std_srvs::srv::Trigger>("home", std::bind(&ArmNode::homeCallback, this, std::placeholders::_1, std::placeholders::_2));
     stop_service_ = this->create_service<std_srvs::srv::Trigger>("stop", std::bind(&ArmNode::stopCallback, this, std::placeholders::_1, std::placeholders::_2));
+    if (use_gripper_) {
+      gripper_service_ = this->create_service<std_srvs::srv::SetBool>("gripper", std::bind(&ArmNode::gripperCallback, this, std::placeholders::_1, std::placeholders::_2));
+    }
     
     // Start the action server
     action_server_ = rclcpp_action::create_server<ArmMotion>(
@@ -171,7 +181,12 @@ private:
   bool use_traj_times_{true};
 
   sensor_msgs::msg::JointState state_msg_;
+  std_msgs::msg::Float64 gripper_state_msg_;
+  geometry_msgs::msg::PoseStamped ee_pose_msg_;
+  geometry_msgs::msg::WrenchStamped ee_wrench_msg_;
+  geometry_msgs::msg::Vector3Stamped ee_force_msg_;
   geometry_msgs::msg::Inertia center_of_mass_message_;
+  std_msgs::msg::Float64 goal_progress_msg_;
 
   Eigen::Vector3d target_xyz {Eigen::Vector3d::Constant(0.0)};
   Eigen::Matrix3d target_rotmat {Eigen::Matrix3d::Identity()};
@@ -191,6 +206,7 @@ private:
   rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr cartesian_waypoint_subscriber_;
   rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr joint_waypoint_subscriber_;
   rclcpp::Subscription<geometry_msgs::msg::Wrench>::SharedPtr cmd_ee_wrench_subscriber_;
+  rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr gripper_command_subscriber_;
 
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr arm_state_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Inertia>::SharedPtr center_of_mass_publisher_;
@@ -198,11 +214,13 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr ee_wrench_publisher_;
   rclcpp::Publisher<geometry_msgs::msg::Vector3Stamped>::SharedPtr ee_force_publisher_;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr goal_progress_publisher_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr gripper_state_publisher_;
 
   rclcpp_action::Server<hebi_msgs::action::ArmMotion>::SharedPtr action_server_;
 
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr home_service_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stop_service_;
+  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr gripper_service_;
 
   rclcpp::TimerBase::SharedPtr timer_;
 
@@ -507,23 +525,19 @@ private:
       response->success = false;
       response->message = "Arm not initialized yet!";
     }
-
-    if (!home_position_available_) {
+    else if (!home_position_available_) {
       RCLCPP_ERROR_STREAM(this->get_logger(), "Home position was not set in the config file!");
       return;
     }
-
-    if (compliant_mode_) {
+    else if (compliant_mode_) {
       response->success = false;
       response->message = "Arm in compliant mode, cannot home arm";
     }
-
-    if (has_active_action_) {
+    else if (has_active_action_) {
       response->success = false;
       response->message = "Arm is executing an action, cannot home arm";
     }
-
-    if (is_homing_) {
+    else if (is_homing_) {
       response->success = false;
       response->message = "Arm is currently homing";
     }
@@ -549,13 +563,11 @@ private:
       response->success = false;
       response->message = "Arm not initialized yet!";
     }
-
-    if (compliant_mode_) {
+    else if (compliant_mode_) {
       response->success = false;
       response->message = "Arm in compliant mode, nothing to stop";
     }
-
-    if (has_active_action_) {
+    else if (has_active_action_) {
       response->success = false;
       response->message = "Cannot stop using /stop service, cancel the active action to stop arm motion";
     }
@@ -568,6 +580,31 @@ private:
     RCLCPP_INFO(this->get_logger(), "Stopping arm motion");
     stopArm();
     response->message = "Stopped arm motion";
+  }
+
+  // Service callback for gripper control
+  void gripperCallback(const std::shared_ptr<std_srvs::srv::SetBool::Request> request, std::shared_ptr<std_srvs::srv::SetBool::Response> response) {
+    (void)request;
+
+    response->success = true;
+
+    if (!gripper_) {
+      response->success = false;
+      response->message = "Gripper not available, cannot control gripper";
+    }
+
+    if (!response->success) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), response->message);
+      return;
+    }
+
+    if (!request->data) {
+      gripper_->open();
+      response->message = "Gripper opened";
+    } else {
+      gripper_->close();
+      response->message = "Gripper closed";
+    }
   }
 
   //////////////////////// SUBSCRIBER CALLBACK FUNCTIONS ////////////////////////
@@ -816,6 +853,17 @@ private:
     // NOTE: Cannot set pending command here, as there is no assurance it will not get overwritten by arm_->update()
   }
 
+  // Control the gripper
+  void gripperCommandCallback(const std_msgs::msg::Float64::SharedPtr gripper_msg) {
+    if (!gripper_) {
+      RCLCPP_ERROR(this->get_logger(), "Gripper not enabled in this arm configuration! Ignoring command");
+      return;
+    }
+
+    // Set the gripper position
+    gripper_->setState(gripper_msg->data);
+  }
+
   /////////////////////////// UTILITY FUNCTIONS ///////////////////////////
 
   void publishState() {
@@ -846,24 +894,29 @@ private:
 
     arm_state_pub_->publish(state_msg_);
 
+    // Publish Gripper State
+    if (use_gripper_) {
+      gripper_state_msg_.data = gripper_->getState();
+      gripper_state_publisher_->publish(gripper_state_msg_);
+    }
+
     // Publish End Effector Pose
     Eigen::Vector3d cur_pose;
     Eigen::Matrix3d cur_orientation;
     arm_->FK(pos, cur_pose, cur_orientation);
     Eigen::Quaterniond cur_orientation_quat(cur_orientation);
 
-    geometry_msgs::msg::PoseStamped pose_msg;
-    pose_msg.header.frame_id = "base_link";
-    pose_msg.header.stamp = this->now();
-    pose_msg.pose.position.x = cur_pose[0];
-    pose_msg.pose.position.y = cur_pose[1];
-    pose_msg.pose.position.z = cur_pose[2];
-    pose_msg.pose.orientation.x = cur_orientation_quat.x();
-    pose_msg.pose.orientation.y = cur_orientation_quat.y();
-    pose_msg.pose.orientation.z = cur_orientation_quat.z();
-    pose_msg.pose.orientation.w = cur_orientation_quat.w();
+    ee_pose_msg_.header.frame_id = "base_link";
+    ee_pose_msg_.header.stamp = this->now();
+    ee_pose_msg_.pose.position.x = cur_pose[0];
+    ee_pose_msg_.pose.position.y = cur_pose[1];
+    ee_pose_msg_.pose.position.z = cur_pose[2];
+    ee_pose_msg_.pose.orientation.x = cur_orientation_quat.x();
+    ee_pose_msg_.pose.orientation.y = cur_orientation_quat.y();
+    ee_pose_msg_.pose.orientation.z = cur_orientation_quat.z();
+    ee_pose_msg_.pose.orientation.w = cur_orientation_quat.w();
 
-    end_effector_pose_publisher_->publish(pose_msg);
+    end_effector_pose_publisher_->publish(ee_pose_msg_);
 
     // Publish Raw End-Effector Wrench    
     Eigen::MatrixXd ee_jacobian;
@@ -880,17 +933,16 @@ private:
     Eigen::VectorXd eff_cmd = fdbk.getEffortCommand();
     Eigen::VectorXd ee_wrench = ee_jacobian_t_pinv * (eff_cmd - eff);
     
-    geometry_msgs::msg::WrenchStamped ee_wrench_msg;
-    ee_wrench_msg.header.stamp = this->now();
-    ee_wrench_msg.header.frame_id = "base_link";
-    ee_wrench_msg.wrench.force.x = ee_wrench(0);
-    ee_wrench_msg.wrench.force.y = ee_wrench(1);
-    ee_wrench_msg.wrench.force.z = ee_wrench(2);
-    ee_wrench_msg.wrench.torque.x = ee_wrench(3);
-    ee_wrench_msg.wrench.torque.y = ee_wrench(4);
-    ee_wrench_msg.wrench.torque.z = ee_wrench(5);
+    ee_wrench_msg_.header.stamp = this->now();
+    ee_wrench_msg_.header.frame_id = "base_link";
+    ee_wrench_msg_.wrench.force.x = ee_wrench(0);
+    ee_wrench_msg_.wrench.force.y = ee_wrench(1);
+    ee_wrench_msg_.wrench.force.z = ee_wrench(2);
+    ee_wrench_msg_.wrench.torque.x = ee_wrench(3);
+    ee_wrench_msg_.wrench.torque.y = ee_wrench(4);
+    ee_wrench_msg_.wrench.torque.z = ee_wrench(5);
     
-    ee_wrench_publisher_->publish(ee_wrench_msg);
+    ee_wrench_publisher_->publish(ee_wrench_msg_);
 
     // Calculate end-effector force based on end-effector position error
     Eigen::Vector3d ee_pos_cmd;
@@ -898,14 +950,13 @@ private:
     arm_->FK(fdbk.getPositionCommand(), ee_pos_cmd, ee_orientation_cmd);
     Eigen::Vector3d pos_error = cur_pose - ee_pos_cmd;
 
-    geometry_msgs::msg::Vector3Stamped ee_force_msg;
-    ee_force_msg.header.stamp = this->now();
-    ee_force_msg.header.frame_id = "base_link";
-    ee_force_msg.vector.x = pos_error(0);
-    ee_force_msg.vector.y = pos_error(1);
-    ee_force_msg.vector.z = pos_error(2);
+    ee_force_msg_.header.stamp = this->now();
+    ee_force_msg_.header.frame_id = "base_link";
+    ee_force_msg_.vector.x = pos_error(0);
+    ee_force_msg_.vector.y = pos_error(1);
+    ee_force_msg_.vector.z = pos_error(2);
 
-    ee_force_publisher_->publish(ee_force_msg);
+    ee_force_publisher_->publish(ee_force_msg_);
 
     // Publish Center of Mass
     auto& model = arm_->robotModel();
@@ -932,9 +983,8 @@ private:
     center_of_mass_publisher_->publish(center_of_mass_message_);
 
     // Publish Goal Progress
-    std_msgs::msg::Float64 goal_progress_msg;
-    goal_progress_msg.data = arm_->goalProgress();
-    goal_progress_publisher_->publish(goal_progress_msg);
+    goal_progress_msg_.data = arm_->goalProgress();
+    goal_progress_publisher_->publish(goal_progress_msg_);
 
     // Reset active command state
     if (this->now().seconds() - last_active_command_time_ > topic_command_timeout_s_) {
