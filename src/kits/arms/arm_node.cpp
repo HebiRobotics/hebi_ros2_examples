@@ -57,14 +57,14 @@ public:
     compliant_mode_des.description = "No arm motion can be commanded in compliant mode. Can be changed during runtime.";
 
     // Declare default parameter values
-    this->declare_parameter("config_file", rclcpp::PARAMETER_STRING);
-    this->declare_parameter("config_package", rclcpp::PARAMETER_STRING);
-    this->declare_parameter("prefix", "");
-    this->declare_parameter("ik_seed", rclcpp::PARAMETER_DOUBLE_ARRAY);
-    this->declare_parameter("use_ik_seed", false);
-    this->declare_parameter("use_traj_times", true);
-    this->declare_parameter("topic_command_timeout", 1.0);
-    this->declare_parameter("compliant_mode", false);
+    this->declare_parameter("config_file", "", config_file_des);
+    this->declare_parameter("config_package", "", config_package_des);
+    this->declare_parameter("prefix", "", prefix_des);
+    this->declare_parameter("ik_seed", std::vector<double>(6, std::numeric_limits<double>::quiet_NaN()), ik_seed_des);
+    this->declare_parameter("use_ik_seed", false, use_ik_seed_des);
+    this->declare_parameter("use_traj_times", true, use_traj_times_des);
+    this->declare_parameter("topic_command_timeout", 1.0, topic_command_timeout_des);
+    this->declare_parameter("compliant_mode", false, compliant_mode_des);
 
     // Get the parameters that are passed into the node
     config_package_ = this->get_parameter("config_package").as_string();
@@ -72,10 +72,7 @@ public:
     topic_command_timeout_s_ = this->get_parameter("topic_command_timeout").as_double();
 
     // Initialize the arm with configs
-    if (!initializeArm()) {
-      RCLCPP_ERROR(this->get_logger(), "Could not initialize arm! Please check if the modules are available on the network.");
-      return;
-    }
+    if (!initializeArm()) return;
 
     // Event handler for parameter changes
     parameter_event_handler_ = std::make_shared<rclcpp::ParameterEventHandler>(this);
@@ -159,7 +156,7 @@ private:
   
   int num_joints_;
 
-  Eigen::VectorXd ik_seed_;
+  Eigen::VectorXd ik_seed_{ Eigen::VectorXd::Constant(6, std::numeric_limits<double>::quiet_NaN()) };
   bool use_ik_seed_{false};
 
   bool use_traj_times_{true};
@@ -213,11 +210,12 @@ private:
     if (ik_seed_vector.size() == 0)
     {
       RCLCPP_WARN(this->get_logger(), "'ik_seed' parameter is empty; Ignoring!");
-      use_ik_seed_ = false;
     }
     else if (ik_seed_vector.size() != this->arm_->size()) {
       RCLCPP_WARN(this->get_logger(), "'ik_seed' parameter not the same length as HRDF file's number of DoF! Ignoring!");
-      use_ik_seed_ = false;
+    }
+    else if (std::any_of(ik_seed_vector.begin(), ik_seed_vector.end(), [](double v){ return !std::isfinite(v); })) {
+      RCLCPP_WARN(this->get_logger(), "'ik_seed' parameter contains non-finite (NaN or Inf) values! Ignoring!");
     }
     else 
     {
@@ -225,7 +223,10 @@ private:
       for (size_t i = 0; i < ik_seed_vector.size(); ++i) {
         ik_seed_[i] = ik_seed_vector[i];
       }
-      RCLCPP_INFO(this->get_logger(), "Found and successfully updated 'ik_seed' parameter");
+      RCLCPP_INFO(this->get_logger(), "Successfully updated 'ik_seed' parameter");
+      if (!use_ik_seed_) {
+        RCLCPP_INFO(this->get_logger(), "Enable 'use_ik_seed' parameter to use the updated IK seed");
+      }
     }
   }
 
@@ -236,8 +237,24 @@ private:
       p.get_type_name().c_str(),
       p.as_bool() ? "true" : "false");
 
-    this->get_parameter("use_ik_seed", use_ik_seed_);
-    RCLCPP_INFO(this->get_logger(), "Found and successfully updated 'use_ik_seed' parameter to %s", use_ik_seed_ ? "true" : "false");
+    bool use_ik_seed;
+    this->get_parameter("use_ik_seed", use_ik_seed);
+    if (use_ik_seed && ik_seed_.size() == 0)
+    {
+      RCLCPP_WARN(this->get_logger(), "'ik_seed' parameter is empty; Correct it before using 'use_ik_seed'!");
+      use_ik_seed_ = false;
+    }
+    else if (use_ik_seed && ik_seed_.size() != this->arm_->size()) {
+      RCLCPP_WARN(this->get_logger(), "'ik_seed' parameter not the same length as HRDF file's number of DoF! Correct it before using 'use_ik_seed'!");
+      use_ik_seed_ = false;
+    }
+    else if (use_ik_seed && std::any_of(ik_seed_.begin(), ik_seed_.end(), [](double v){ return !std::isfinite(v); })) {
+      RCLCPP_WARN(this->get_logger(), "'ik_seed' parameter contains non-finite (NaN or Inf) values! Correct it before using 'use_ik_seed'!");
+    }
+    else {
+      use_ik_seed_ = use_ik_seed;
+      RCLCPP_INFO(this->get_logger(), "Successfully updated 'use_ik_seed' parameter to %s", use_ik_seed_ ? "true" : "false");
+    }
   }
 
   void useTrajTimesCallback(const rclcpp::Parameter & p) {
@@ -1078,43 +1095,31 @@ private:
     arm_ = arm::Arm::create(*arm_config);
     // Terminate if arm not found
     if (!arm_) {
-      RCLCPP_ERROR(this->get_logger(), "Failed to create arm!");
+      RCLCPP_ERROR(this->get_logger(), "Failed to create arm! Please check if the modules are available on the network and the config file is correct.");
       return false;
     }
     RCLCPP_INFO(this->get_logger(), "Arm connected.");
     num_joints_ = arm_->size();
     arm_->update();
 
+    auto arm_config_user_data = arm_config->getUserData();
+
     // Check if home position is provided
-    if (arm_config->getUserData().hasFloatList("home_position")) {
+    if (arm_config_user_data.hasFloatList("home_position")) {
 
       // Check that home_position has the right length
-      if (arm_config->getUserData().getFloatList("home_position").size() != num_joints_) {
+      if (arm_config_user_data.getFloatList("home_position").size() != num_joints_) {
         RCLCPP_ERROR(this->get_logger(), "HEBI config \"user_data\"'s \"home_position\" field must have the same number of elements as degrees of freedom! Ignoring...");
         home_position_.fill(std::numeric_limits<double>::quiet_NaN());
       }
       else {
-        home_position_ = Eigen::Map<Eigen::VectorXd>(arm_config->getUserData().getFloatList("home_position").data(), arm_config->getUserData().getFloatList("home_position").size());
+        home_position_ = Eigen::Map<Eigen::VectorXd>(arm_config_user_data.getFloatList("home_position").data(), arm_config_user_data.getFloatList("home_position").size());
         home_position_available_ = true;
         RCLCPP_INFO(this->get_logger(), "Found and successfully read 'home_position' parameter.");
       }
     } else {
       RCLCPP_WARN(this->get_logger(), "\"home_position\" not provided in config file. Not traveling to home.");
       home_position_.fill(std::numeric_limits<double>::quiet_NaN());
-    }
-
-    // Check if IK seed is provided
-    if (arm_config->getUserData().hasFloatList("ik_seed_pos")) {
-
-      // Check if ik_seed has the right length
-      if (arm_config->getUserData().getFloatList("ik_seed_pos").size() != num_joints_) {
-        RCLCPP_ERROR(this->get_logger(), "HEBI config \"user_data\"'s \"ik_seed\" field must have the same number of elements as degrees of freedom! Ignoring...");
-        use_ik_seed_ = false;
-      }
-      else {
-        ik_seed_ = Eigen::Map<Eigen::VectorXd>(arm_config->getUserData().getFloatList("ik_seed_pos").data(), arm_config->getUserData().getFloatList("ik_seed_pos").size());
-        RCLCPP_INFO(this->get_logger(), "Found and successfully read 'ik_seed' parameter. Set `use_ik_seed` parameter to true to use it.");
-      }
     }
 
     // Get the "use_ik_seed" parameter
@@ -1124,6 +1129,36 @@ private:
       RCLCPP_WARN(this->get_logger(), "Could not find/read 'use_ik_seed' parameter; Setting use_ik_seed to false!");
       use_ik_seed_ = false;
     }
+    
+    // Check if IK seed is provided
+    if (arm_config_user_data.hasFloatList("ik_seed_pos")) {
+      // Check if ik_seed has the right length
+      auto ik_seed_pos = arm_config_user_data.getFloatList("ik_seed_pos");
+      if (ik_seed_pos.empty()) {
+        RCLCPP_ERROR(this->get_logger(), "HEBI config \"user_data\"'s \"ik_seed\" field is empty! Ignoring...");
+        use_ik_seed_ = false;
+      }
+      else if (ik_seed_pos.size() != num_joints_) {
+        RCLCPP_ERROR(this->get_logger(), "HEBI config \"user_data\"'s \"ik_seed\" field must have the same number of elements as degrees of freedom! Ignoring...");
+        use_ik_seed_ = false;
+      }
+      else if (std::any_of(ik_seed_pos.begin(), ik_seed_pos.end(), [](float val) { return !std::isfinite(val); })) {
+        RCLCPP_ERROR(this->get_logger(), "HEBI config \"user_data\"'s \"ik_seed\" field contains non-finite values! Ignoring...");
+        use_ik_seed_ = false;
+      }
+      else {
+        ik_seed_ = Eigen::Map<Eigen::VectorXd>(ik_seed_pos.data(), ik_seed_pos.size());
+        RCLCPP_INFO(this->get_logger(), "Found and successfully read 'ik_seed' parameter. Set `use_ik_seed` parameter to true to use it.");
+      }
+    }
+    else {
+      RCLCPP_WARN(this->get_logger(), "\"ik_seed_pos\" not provided in config file. Not using IK seed.");
+      use_ik_seed_ = false; // Default to false if not provided
+      ik_seed_.fill(std::numeric_limits<double>::quiet_NaN());
+    }
+
+    this->set_parameter(rclcpp::Parameter("use_ik_seed", use_ik_seed_));
+    this->set_parameter(rclcpp::Parameter("ik_seed", std::vector<double>(ik_seed_.data(), ik_seed_.data() + ik_seed_.size())));
 
     // Get the "use_traj_times" for the arm
     if (this->has_parameter("use_traj_times")) {
@@ -1146,6 +1181,7 @@ private:
     }
     // TODO: Figure out a way to get link names from the arm, so it doesn't need to be input separately
     state_msg_.name = full_names;
+
     return true;
   }
 };
@@ -1158,7 +1194,6 @@ int main(int argc, char ** argv) {
   auto node = std::make_shared<hebi::ros::ArmNode>();
 
   while (rclcpp::ok()) {
-
     node->update();
     // Call any pending callbacks (note -- this may update our planned motion)
     rclcpp::spin_some(node);
