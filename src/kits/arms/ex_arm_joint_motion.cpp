@@ -3,7 +3,7 @@
 
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 
-#include <hebi_msgs/action/arm_motion.hpp>
+#include <hebi_msgs/action/arm_joint_motion.hpp>
 
 #ifndef M_PI
   #define M_PI 3.14159265358979323846
@@ -15,14 +15,16 @@ namespace ros {
 
 class MoveArm : public rclcpp::Node {
 public:
-  using ArmMotion = hebi_msgs::action::ArmMotion;
-  using GoalHandleArmMotion = rclcpp_action::ClientGoalHandle<ArmMotion>;
+  using ArmJointMotion = hebi_msgs::action::ArmJointMotion;
+  using GoalHandleArmJointMotion = rclcpp_action::ClientGoalHandle<ArmJointMotion>;
   
   MoveArm() : Node("move_arm") {
 
-    this->client_ptr_ = rclcpp_action::create_client<ArmMotion>(
+    this->client_ptr_ = rclcpp_action::create_client<ArmJointMotion>(
       this,
-      "arm_motion");
+      "joint_motion");
+
+    this->use_gripper_ = false;  // Change to true if using a gripper
     
     this->timer_ = this->create_wall_timer(
       std::chrono::milliseconds(500),
@@ -45,33 +47,45 @@ public:
 
     double nan = std::numeric_limits<double>::quiet_NaN();
 
-    auto goal_msg = ArmMotion::Goal();
+    auto goal_msg = ArmJointMotion::Goal();
     trajectory_msgs::msg::JointTrajectoryPoint point;
 
     RCLCPP_INFO(this->get_logger(), "Sending waypoints");
-    // point.positions = {0.24, -0.2, 0.27, M_PI, M_PI/2, M_PI/2};
-    point.positions = {0.0, 2.09439, 2.09439, 0.0, M_PI/2, 0.0};
+    point.positions = {0.0, 1.2, 1.8, 0.6, 1.5708, 0.0};
     point.velocities = {0, 0, 0, 0, 0, 0};
     point.accelerations = {0, 0, 0, 0, 0, 0};
+    
+    if (this->use_gripper_) {
+      point.positions.push_back(0.0);
+      point.velocities.push_back(0);
+      point.accelerations.push_back(0);
+    }
+    
     point.time_from_start = rclcpp::Duration::from_seconds(2.0);
     goal_msg.waypoints.points.push_back(point);
     goal_msg.use_wp_times = true;
-    goal_msg.wp_type = ArmMotion::Goal::JOINT_SPACE;
 
     double dt = 0.25, t = 2.0;
-    while (t < 18.0)
+    while (t < 14.0)
     {
       t += dt;
-      point.positions = {M_PI/2.0 * cos(M_PI*t/4.0), 2.09439, 2.09439, 0.0, M_PI/2, 0.0};
-      point.velocities = {-M_PI*M_PI/8.0 * sin(M_PI*t/4.0), 0.0, 0.0, 0.0, 0.0, 0.0};
+      point.positions = {M_PI/4.0 * cos(M_PI*t/4.0), 1.2, 1.8, 0.6, 1.5708, 0.0};
+      point.velocities = {-M_PI*M_PI/16.0 * sin(M_PI*t/4.0), 0.0, 0.0, 0.0, 0.0, 0.0};
       point.accelerations = {nan, nan, nan, nan, nan, nan};
+      
+      if (this->use_gripper_) {
+        point.positions.push_back(cos(M_PI*t/2.0));
+        point.velocities.push_back(0.0);
+        point.accelerations.push_back(nan);
+      }
+      
       point.time_from_start = rclcpp::Duration::from_seconds(t);
       goal_msg.waypoints.points.push_back(point);
     }
 
     RCLCPP_INFO(this->get_logger(), "Sending waypoints");
 
-    auto send_goal_options = rclcpp_action::Client<ArmMotion>::SendGoalOptions();
+    auto send_goal_options = rclcpp_action::Client<ArmJointMotion>::SendGoalOptions();
     send_goal_options.goal_response_callback = std::bind(&MoveArm::goal_response_callback, this, std::placeholders::_1);
     send_goal_options.feedback_callback = std::bind(&MoveArm::feedback_callback, this, std::placeholders::_1, std::placeholders::_2);
     send_goal_options.result_callback = std::bind(&MoveArm::result_callback, this, std::placeholders::_1);
@@ -80,10 +94,11 @@ public:
   }
 
 private:
-  rclcpp_action::Client<ArmMotion>::SharedPtr client_ptr_;
+  rclcpp_action::Client<ArmJointMotion>::SharedPtr client_ptr_;
+  bool use_gripper_;
   rclcpp::TimerBase::SharedPtr timer_;
 
-  void goal_response_callback(const GoalHandleArmMotion::SharedPtr & goal_handle) {
+  void goal_response_callback(const GoalHandleArmJointMotion::SharedPtr & goal_handle) {
     if (!goal_handle) {
       RCLCPP_ERROR(this->get_logger(), "Goal was rejected by server");
     } else {
@@ -91,11 +106,11 @@ private:
     }
   }
 
-  void feedback_callback(GoalHandleArmMotion::SharedPtr, const std::shared_ptr<const ArmMotion::Feedback> feedback) {
+  void feedback_callback(GoalHandleArmJointMotion::SharedPtr, const std::shared_ptr<const ArmJointMotion::Feedback> feedback) {
     RCLCPP_INFO(this->get_logger(), "Percent Complete: %f", feedback->percent_complete);
   }
 
-  void result_callback(const GoalHandleArmMotion::WrappedResult & result) {
+  void result_callback(const GoalHandleArmJointMotion::WrappedResult & result) {
     switch (result.code) {
       case rclcpp_action::ResultCode::SUCCEEDED:
         break;

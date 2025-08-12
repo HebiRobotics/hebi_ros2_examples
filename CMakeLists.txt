@@ -49,11 +49,19 @@ ament_target_dependencies(arm_node
   control_msgs
 )
 
-add_executable(move_arm src/kits/arms/move_arm.cpp)
-ament_target_dependencies(move_arm
+add_executable(ex_arm_joint_motion src/kits/arms/ex_arm_joint_motion.cpp)
+ament_target_dependencies(ex_arm_joint_motion
   rclcpp
   rclcpp_action
   trajectory_msgs
+  hebi_msgs
+  geometry_msgs
+)
+
+add_executable(ex_arm_cartesian_motion src/kits/arms/ex_arm_cartesian_motion.cpp)
+ament_target_dependencies(ex_arm_cartesian_motion
+  rclcpp
+  rclcpp_action
   hebi_msgs
   geometry_msgs
 )
@@ -155,7 +163,8 @@ install(TARGETS
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS
-  move_arm
+  ex_arm_joint_motion
+  ex_arm_cartesian_motion
   DESTINATION lib/${PROJECT_NAME})
 
 # Python modules
@@ -163,7 +172,8 @@ ament_python_install_package(${PROJECT_NAME})
 
 # Install python executables
 install(PROGRAMS
-  scripts/ex_publish_trajectory.py
+  scripts/ex_publish_joint_trajectory.py
+  scripts/ex_publish_cartesian_trajectory.py
   scripts/ex_teach_repeat_mobileio.py
   scripts/ex_teleop_mobileio.py
   scripts/ex_haptic_teleop_node.py

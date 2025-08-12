@@ -5,6 +5,7 @@
 #include <control_msgs/msg/joint_jog.hpp>
 #include <hebi_msgs/msg/se3_jog.hpp>
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
+#include <hebi_msgs/msg/se3_trajectory.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <geometry_msgs/msg/inertia.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
@@ -14,7 +15,9 @@
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float64.hpp>
 #include <std_srvs/srv/trigger.hpp>
-#include <hebi_msgs/action/arm_motion.hpp>
+#include <std_srvs/srv/set_bool.hpp>
+#include <hebi_msgs/action/arm_joint_motion.hpp>
+#include <hebi_msgs/action/arm_se3_motion.hpp>
 
 #include "hebi_cpp_api/group_command.hpp"
 #include "hebi_cpp_api/robot_model.hpp"
@@ -29,8 +32,10 @@ namespace ros {
 
 class ArmNode : public rclcpp::Node {
 public:
-  using ArmMotion = hebi_msgs::action::ArmMotion;
-  using GoalHandleArmMotion = rclcpp_action::ServerGoalHandle<ArmMotion>;
+  using ArmJointMotion = hebi_msgs::action::ArmJointMotion;
+  using GoalHandleArmJointMotion = rclcpp_action::ServerGoalHandle<ArmJointMotion>;
+  using ArmSE3Motion = hebi_msgs::action::ArmSE3Motion;
+  using GoalHandleArmSE3Motion = rclcpp_action::ServerGoalHandle<ArmSE3Motion>;
   
   ArmNode() : Node("arm_node") {
 
@@ -39,6 +44,7 @@ public:
     auto config_file_des = rcl_interfaces::msg::ParameterDescriptor{};
     auto config_package_des = rcl_interfaces::msg::ParameterDescriptor{};
     auto prefix_des = rcl_interfaces::msg::ParameterDescriptor{};
+    auto use_gripper_des = rcl_interfaces::msg::ParameterDescriptor{};
 
     // Parameters passed through config file changed during runtime
     auto ik_seed_des = rcl_interfaces::msg::ParameterDescriptor{};
@@ -50,6 +56,7 @@ public:
     config_file_des.description = "Config file for the arm of type .cfg.yaml.";
     config_package_des.description = "Package containg the config file.";
     prefix_des.description = "Prefix for the arm.";
+    use_gripper_des.description = "Use the gripper if available. If false, the gripper will not be used even if it is available.";
     ik_seed_des.description = "Seed for inverse kinematics. Can be changed during runtime.";
     use_ik_seed_des.description = "Use the stored IK seed position. Can be changed during runtime.";
     use_traj_times_des.description = "Use trajectory times specified in the trajectory messages. If false, a default time is used based on a heuristic. Can be changed during runtime.";
@@ -57,25 +64,24 @@ public:
     compliant_mode_des.description = "No arm motion can be commanded in compliant mode. Can be changed during runtime.";
 
     // Declare default parameter values
-    this->declare_parameter("config_file", rclcpp::PARAMETER_STRING);
-    this->declare_parameter("config_package", rclcpp::PARAMETER_STRING);
-    this->declare_parameter("prefix", "");
-    this->declare_parameter("ik_seed", rclcpp::PARAMETER_DOUBLE_ARRAY);
-    this->declare_parameter("use_ik_seed", false);
-    this->declare_parameter("use_traj_times", true);
-    this->declare_parameter("topic_command_timeout", 1.0);
-    this->declare_parameter("compliant_mode", false);
+    this->declare_parameter("config_file", "", config_file_des);
+    this->declare_parameter("config_package", "", config_package_des);
+    this->declare_parameter("prefix", "", prefix_des);
+    this->declare_parameter("use_gripper", false, use_gripper_des);
+    this->declare_parameter("ik_seed", std::vector<double>(6, std::numeric_limits<double>::quiet_NaN()), ik_seed_des);
+    this->declare_parameter("use_ik_seed", false, use_ik_seed_des);
+    this->declare_parameter("use_traj_times", true, use_traj_times_des);
+    this->declare_parameter("topic_command_timeout", 1.0, topic_command_timeout_des);
+    this->declare_parameter("compliant_mode", false, compliant_mode_des);
 
     // Get the parameters that are passed into the node
     config_package_ = this->get_parameter("config_package").as_string();
     config_file_ = this->get_parameter("config_file").as_string();
     topic_command_timeout_s_ = this->get_parameter("topic_command_timeout").as_double();
+    use_gripper_ = this->get_parameter("use_gripper").as_bool();
 
     // Initialize the arm with configs
-    if (!initializeArm()) {
-      RCLCPP_ERROR(this->get_logger(), "Could not initialize arm! Please check if the modules are available on the network.");
-      return;
-    }
+    if (!initializeArm()) return;
 
     // Event handler for parameter changes
     parameter_event_handler_ = std::make_shared<rclcpp::ParameterEventHandler>(this);
@@ -91,9 +97,12 @@ public:
     joint_jog_subscriber_ = this->create_subscription<control_msgs::msg::JointJog>("joint_jog", 10, std::bind(&ArmNode::jointJogCallback, this, std::placeholders::_1));
     cartesian_jog_subscriber_ = this->create_subscription<hebi_msgs::msg::SE3Jog>("cartesian_jog", 10, std::bind(&ArmNode::cartesianJogCallback, this, std::placeholders::_1));
     SE3_jog_subscriber_ = this->create_subscription<hebi_msgs::msg::SE3Jog>("SE3_jog", 10, std::bind(&ArmNode::SE3JogCallback, this, std::placeholders::_1));
-    joint_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("joint_trajectory", 10, std::bind(&ArmNode::jointWaypointsCallback, this, std::placeholders::_1));
-    cartesian_waypoint_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("cartesian_trajectory", 10, std::bind(&ArmNode::cartesianWaypointsCallback, this, std::placeholders::_1));
+    joint_trajectory_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("joint_trajectory", 10, std::bind(&ArmNode::jointTrajectoryCallback, this, std::placeholders::_1));
+    cartesian_trajectory_subscriber_ = this->create_subscription<hebi_msgs::msg::SE3Trajectory>("cartesian_trajectory", 10, std::bind(&ArmNode::cartesianTrajectoryCallback, this, std::placeholders::_1));
     cmd_ee_wrench_subscriber_ = this->create_subscription<geometry_msgs::msg::Wrench>("cmd_ee_wrench", 10, std::bind(&ArmNode::wrenchCommandCallback, this, std::placeholders::_1));
+    if (use_gripper_) {
+      gripper_command_subscriber_ = this->create_subscription<std_msgs::msg::Float64>("cmd_gripper", 10, std::bind(&ArmNode::gripperCommandCallback, this, std::placeholders::_1));
+    }
 
     // Publishers
     arm_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("joint_states", 10);
@@ -102,18 +111,31 @@ public:
     ee_wrench_publisher_ = this->create_publisher<geometry_msgs::msg::WrenchStamped>("ee_wrench", 10);
     ee_force_publisher_ = this->create_publisher<geometry_msgs::msg::Vector3Stamped>("ee_force", 10);
     goal_progress_publisher_ = this->create_publisher<std_msgs::msg::Float64>("goal_progress", 10);
+    if (use_gripper_) {
+      gripper_state_publisher_ = this->create_publisher<std_msgs::msg::Float64>("gripper_state", 10);
+    }
 
     // Services
     home_service_ = this->create_service<std_srvs::srv::Trigger>("home", std::bind(&ArmNode::homeCallback, this, std::placeholders::_1, std::placeholders::_2));
     stop_service_ = this->create_service<std_srvs::srv::Trigger>("stop", std::bind(&ArmNode::stopCallback, this, std::placeholders::_1, std::placeholders::_2));
+    if (use_gripper_) {
+      gripper_service_ = this->create_service<std_srvs::srv::SetBool>("gripper", std::bind(&ArmNode::gripperCallback, this, std::placeholders::_1, std::placeholders::_2));
+    }
     
-    // Start the action server
-    action_server_ = rclcpp_action::create_server<ArmMotion>(
+    // Action servers
+    joint_action_server_ = rclcpp_action::create_server<ArmJointMotion>(
       this,
-      "arm_motion",
-      std::bind(&ArmNode::handleArmMotionGoal, this, std::placeholders::_1, std::placeholders::_2),
-      std::bind(&ArmNode::handleArmMotionCancel, this, std::placeholders::_1),
-      std::bind(&ArmNode::handleArmMotionAccepted, this, std::placeholders::_1)
+      "joint_motion",
+      std::bind(&ArmNode::handleJointMotionGoal, this, std::placeholders::_1, std::placeholders::_2),
+      std::bind(&ArmNode::handleJointMotionCancel, this, std::placeholders::_1),
+      std::bind(&ArmNode::handleJointMotionAccepted, this, std::placeholders::_1)
+    );
+    se3_action_server_ = rclcpp_action::create_server<ArmSE3Motion>(
+      this,
+      "cartesian_motion",
+      std::bind(&ArmNode::handleSE3MotionGoal, this, std::placeholders::_1, std::placeholders::_2),
+      std::bind(&ArmNode::handleSE3MotionCancel, this, std::placeholders::_1),
+      std::bind(&ArmNode::handleSE3MotionAccepted, this, std::placeholders::_1)
     );
 
     timer_ = this->create_wall_timer(std::chrono::milliseconds(5), std::bind(&ArmNode::publishState, this));
@@ -157,15 +179,21 @@ private:
   
   Eigen::VectorXd cmd_joint_effort_{ Eigen::VectorXd::Zero(6) };
   
-  int num_joints_;
+  int num_joints_{0};
+  int num_grippers_{0};
 
-  Eigen::VectorXd ik_seed_;
+  Eigen::VectorXd ik_seed_{ Eigen::VectorXd::Constant(6, std::numeric_limits<double>::quiet_NaN()) };
   bool use_ik_seed_{false};
 
   bool use_traj_times_{true};
 
   sensor_msgs::msg::JointState state_msg_;
+  std_msgs::msg::Float64 gripper_state_msg_;
+  geometry_msgs::msg::PoseStamped ee_pose_msg_;
+  geometry_msgs::msg::WrenchStamped ee_wrench_msg_;
+  geometry_msgs::msg::Vector3Stamped ee_force_msg_;
   geometry_msgs::msg::Inertia center_of_mass_message_;
+  std_msgs::msg::Float64 goal_progress_msg_;
 
   Eigen::Vector3d target_xyz {Eigen::Vector3d::Constant(0.0)};
   Eigen::Matrix3d target_rotmat {Eigen::Matrix3d::Identity()};
@@ -176,12 +204,16 @@ private:
   double last_active_command_time_{0.0};
   double topic_command_timeout_s_{1.0};
 
+  bool use_gripper_{false};
+  std::shared_ptr<hebi::arm::Gripper> gripper_;
+
   rclcpp::Subscription<control_msgs::msg::JointJog>::SharedPtr joint_jog_subscriber_;
   rclcpp::Subscription<hebi_msgs::msg::SE3Jog>::SharedPtr cartesian_jog_subscriber_;
   rclcpp::Subscription<hebi_msgs::msg::SE3Jog>::SharedPtr SE3_jog_subscriber_;
-  rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr cartesian_waypoint_subscriber_;
-  rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr joint_waypoint_subscriber_;
+  rclcpp::Subscription<hebi_msgs::msg::SE3Trajectory>::SharedPtr cartesian_trajectory_subscriber_;
+  rclcpp::Subscription<trajectory_msgs::msg::JointTrajectory>::SharedPtr joint_trajectory_subscriber_;
   rclcpp::Subscription<geometry_msgs::msg::Wrench>::SharedPtr cmd_ee_wrench_subscriber_;
+  rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr gripper_command_subscriber_;
 
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr arm_state_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Inertia>::SharedPtr center_of_mass_publisher_;
@@ -189,11 +221,14 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr ee_wrench_publisher_;
   rclcpp::Publisher<geometry_msgs::msg::Vector3Stamped>::SharedPtr ee_force_publisher_;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr goal_progress_publisher_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr gripper_state_publisher_;
 
-  rclcpp_action::Server<hebi_msgs::action::ArmMotion>::SharedPtr action_server_;
+  rclcpp_action::Server<hebi_msgs::action::ArmJointMotion>::SharedPtr joint_action_server_;
+  rclcpp_action::Server<hebi_msgs::action::ArmSE3Motion>::SharedPtr se3_action_server_;
 
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr home_service_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stop_service_;
+  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr gripper_service_;
 
   rclcpp::TimerBase::SharedPtr timer_;
 
@@ -213,11 +248,12 @@ private:
     if (ik_seed_vector.size() == 0)
     {
       RCLCPP_WARN(this->get_logger(), "'ik_seed' parameter is empty; Ignoring!");
-      use_ik_seed_ = false;
     }
     else if (ik_seed_vector.size() != this->arm_->size()) {
       RCLCPP_WARN(this->get_logger(), "'ik_seed' parameter not the same length as HRDF file's number of DoF! Ignoring!");
-      use_ik_seed_ = false;
+    }
+    else if (std::any_of(ik_seed_vector.begin(), ik_seed_vector.end(), [](double v){ return !std::isfinite(v); })) {
+      RCLCPP_WARN(this->get_logger(), "'ik_seed' parameter contains non-finite (NaN or Inf) values! Ignoring!");
     }
     else 
     {
@@ -225,7 +261,10 @@ private:
       for (size_t i = 0; i < ik_seed_vector.size(); ++i) {
         ik_seed_[i] = ik_seed_vector[i];
       }
-      RCLCPP_INFO(this->get_logger(), "Found and successfully updated 'ik_seed' parameter");
+      RCLCPP_INFO(this->get_logger(), "Successfully updated 'ik_seed' parameter");
+      if (!use_ik_seed_) {
+        RCLCPP_INFO(this->get_logger(), "Enable 'use_ik_seed' parameter to use the updated IK seed");
+      }
     }
   }
 
@@ -236,8 +275,24 @@ private:
       p.get_type_name().c_str(),
       p.as_bool() ? "true" : "false");
 
-    this->get_parameter("use_ik_seed", use_ik_seed_);
-    RCLCPP_INFO(this->get_logger(), "Found and successfully updated 'use_ik_seed' parameter to %s", use_ik_seed_ ? "true" : "false");
+    bool use_ik_seed;
+    this->get_parameter("use_ik_seed", use_ik_seed);
+    if (use_ik_seed && ik_seed_.size() == 0)
+    {
+      RCLCPP_WARN(this->get_logger(), "'ik_seed' parameter is empty; Correct it before using 'use_ik_seed'!");
+      use_ik_seed_ = false;
+    }
+    else if (use_ik_seed && ik_seed_.size() != this->arm_->size()) {
+      RCLCPP_WARN(this->get_logger(), "'ik_seed' parameter not the same length as HRDF file's number of DoF! Correct it before using 'use_ik_seed'!");
+      use_ik_seed_ = false;
+    }
+    else if (use_ik_seed && std::any_of(ik_seed_.begin(), ik_seed_.end(), [](double v){ return !std::isfinite(v); })) {
+      RCLCPP_WARN(this->get_logger(), "'ik_seed' parameter contains non-finite (NaN or Inf) values! Correct it before using 'use_ik_seed'!");
+    }
+    else {
+      use_ik_seed_ = use_ik_seed;
+      RCLCPP_INFO(this->get_logger(), "Successfully updated 'use_ik_seed' parameter to %s", use_ik_seed_ ? "true" : "false");
+    }
   }
 
   void useTrajTimesCallback(const rclcpp::Parameter & p) {
@@ -294,55 +349,58 @@ private:
 
   //////////////////////// ACTION HANDLER FUNCTIONS ////////////////////////
 
-  rclcpp_action::GoalResponse handleArmMotionGoal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const ArmMotion::Goal> goal) {
-    RCLCPP_INFO(this->get_logger(), "Received arm motion action request");
-    (void)uuid;
+  bool checkActionConditions(std::string action_name) {
     if (!arm_initialized_) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - arm not initialized!");
-      return rclcpp_action::GoalResponse::REJECT;
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting " << action_name << " action request - arm not initialized!");
+      return false;
     }
     if (compliant_mode_) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - in compliant mode!");
-      return rclcpp_action::GoalResponse::REJECT;
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting " << action_name << " action request - in compliant mode!");
+      return false;
     }
     if (has_active_action_) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - arm already has an active trajectory!");
-      return rclcpp_action::GoalResponse::REJECT;
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting " << action_name << " action request - arm already has an active trajectory!");
+      return false;
     }
     if (is_homing_) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - arm is currently homing!");
-      return rclcpp_action::GoalResponse::REJECT;
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting " << action_name << " action request - arm is currently homing!");
+      return false;
     }
     if (has_active_topic_commands_) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - arm is currently receiving topic commands!");
-      return rclcpp_action::GoalResponse::REJECT;
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting " << action_name << " action request - arm is currently receiving topic commands!");
+      return false;
     }
-    if (goal->wp_type != ArmMotion::Goal::CARTESIAN_SPACE && goal->wp_type != ArmMotion::Goal::JOINT_SPACE) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - invalid waypoint type, should be 'CARTESIAN' or 'JOINT'");
+    return true;
+  }
+
+  rclcpp_action::GoalResponse handleJointMotionGoal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const ArmJointMotion::Goal> goal) {
+    RCLCPP_INFO(this->get_logger(), "Received arm joint motion action request");
+    (void)uuid;
+    if (!checkActionConditions("arm joint motion")) {
       return rclcpp_action::GoalResponse::REJECT;
     }
     if (goal->waypoints.points.empty()) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - no waypoints specified");
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm joint motion action request - no waypoints specified");
       return rclcpp_action::GoalResponse::REJECT;
     }
     return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
   }
 
-  rclcpp_action::CancelResponse handleArmMotionCancel(const std::shared_ptr<GoalHandleArmMotion> goal_handle) {
+  rclcpp_action::CancelResponse handleJointMotionCancel(const std::shared_ptr<GoalHandleArmJointMotion> goal_handle) {
     RCLCPP_INFO(this->get_logger(), "Received request to cancel arm motion action");
     (void)goal_handle;
     return rclcpp_action::CancelResponse::ACCEPT;
   }
 
-  void handleArmMotionAccepted(const std::shared_ptr<GoalHandleArmMotion> goal_handle) {
+  void handleJointMotionAccepted(const std::shared_ptr<GoalHandleArmJointMotion> goal_handle) {
     // this needs to return quickly to avoid blocking the executor
     // spin up a new thread to execute the action
-    std::thread{std::bind(&ArmNode::startArmMotion, this, std::placeholders::_1), goal_handle}.detach();
+    std::thread{std::bind(&ArmNode::startArmJointMotion, this, std::placeholders::_1), goal_handle}.detach();
   }
 
-  void startArmMotion(const std::shared_ptr<GoalHandleArmMotion> goal_handle) {
-    RCLCPP_INFO(this->get_logger(), "Executing arm motion action");
-    
+  void startArmJointMotion(const std::shared_ptr<GoalHandleArmJointMotion> goal_handle) {
+    RCLCPP_INFO(this->get_logger(), "Executing arm joint motion action");
+
     // Set active action flag
     has_active_action_ = true;
 
@@ -350,8 +408,8 @@ private:
     rclcpp::Rate r(10);
 
     const auto goal = goal_handle->get_goal();
-    auto feedback = std::make_shared<ArmMotion::Feedback>();
-    auto result = std::make_shared<ArmMotion::Result>();
+    auto feedback = std::make_shared<ArmJointMotion::Feedback>();
+    auto result = std::make_shared<ArmJointMotion::Result>();
 
     // Replan a smooth joint trajectory from the current location through a
     // series of cartesian waypoints.
@@ -362,57 +420,180 @@ private:
     Eigen::VectorXd wp_times(num_waypoints);
     bool use_traj_times = goal->use_wp_times;
 
-    int waypoint_type = goal->wp_type;
+    // Get each waypoint in joint space
+    Eigen::MatrixXd pos(num_joints_, num_waypoints);
+    Eigen::MatrixXd vel(num_joints_, num_waypoints);
+    Eigen::MatrixXd accel(num_joints_, num_waypoints);
+    Eigen::MatrixXd gripper_states(num_grippers_, num_waypoints);
 
-    if (waypoint_type == ArmMotion::Goal::CARTESIAN_SPACE) {
-      // Get each waypoint in cartesian space
-      Eigen::Matrix3Xd xyz_positions(3, num_waypoints);
-      Eigen::Matrix3Xd euler_angles(3, num_waypoints);
-      for (size_t i = 0; i < num_waypoints; ++i) {
-        if (use_traj_times) {
-          wp_times(i) = goal->waypoints.points[i].time_from_start.sec + goal->waypoints.points[i].time_from_start.nanosec * 1e-9;
-        }
-        xyz_positions(0, i) = goal->waypoints.points[i].positions[0];
-        xyz_positions(1, i) = goal->waypoints.points[i].positions[1];
-        xyz_positions(2, i) = goal->waypoints.points[i].positions[2];
-        euler_angles(0, i) = goal->waypoints.points[i].positions[3];
-        euler_angles(1, i) = goal->waypoints.points[i].positions[4];
-        euler_angles(2, i) = goal->waypoints.points[i].positions[5];
+    for (size_t i = 0; i < num_waypoints; ++i) {
+      if (use_traj_times) {
+        wp_times(i) = goal->waypoints.points[i].time_from_start.sec + goal->waypoints.points[i].time_from_start.nanosec * 1e-9;
       }
 
-      updateSE3Waypoints(use_traj_times, wp_times, xyz_positions, &euler_angles, false);
-    } else if (waypoint_type == ArmMotion::Goal::JOINT_SPACE) {
-      // Get each waypoint in joint space
-      Eigen::MatrixXd pos(num_joints_, num_waypoints);
-      Eigen::MatrixXd vel(num_joints_, num_waypoints);
-      Eigen::MatrixXd accel(num_joints_, num_waypoints);
+      auto cmd_waypoint = goal->waypoints.points[i];
 
-      for (size_t i = 0; i < num_waypoints; ++i) {
-        if (use_traj_times) {
-          wp_times(i) = goal->waypoints.points[i].time_from_start.sec + goal->waypoints.points[i].time_from_start.nanosec * 1e-9;
-        }
-        
-        if (goal->waypoints.points[i].positions.size() != static_cast<size_t>(num_joints_) ||
-            goal->waypoints.points[i].velocities.size() != static_cast<size_t>(num_joints_) ||
-            goal->waypoints.points[i].accelerations.size() != static_cast<size_t>(num_joints_)) {
-          RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - Position, velocity, and acceleration sizes not correct for waypoint index");
-          result->success = false;
-          goal_handle->abort(result);
+      if (cmd_waypoint.positions.size() != static_cast<size_t>(num_joints_ + num_grippers_)) {
+        RCLCPP_ERROR_STREAM(this->get_logger(), "Position size not correct for waypoint index " << i
+                            << ", got " << cmd_waypoint.positions.size() << " (should be " << num_joints_ + num_grippers_ << ")");
+        result->success = false;
+        goal_handle->abort(result);
 
-          // Reset active action flag
-          has_active_action_ = false;
-          return;
-        }
+        // Reset active action flag
+        has_active_action_ = false;
+        return;
+      }
+      if (cmd_waypoint.velocities.size() != static_cast<size_t>(num_joints_ + num_grippers_)) {
+        RCLCPP_ERROR_STREAM(this->get_logger(), "Velocity size not correct for waypoint index " << i
+                            << ", got " << cmd_waypoint.velocities.size() << " (should be " << num_joints_ + num_grippers_ << ")");
+        result->success = false;
+        goal_handle->abort(result);
 
-        for (size_t j = 0; j < static_cast<size_t>(num_joints_); ++j) {
-          pos(j, i) = goal->waypoints.points[i].positions[j];
-          vel(j, i) = goal->waypoints.points[i].velocities[j];
-          accel(j, i) = goal->waypoints.points[i].accelerations[j];
-        }
+        // Reset active action flag
+        has_active_action_ = false;
+        return;
+      }
+      if (cmd_waypoint.accelerations.size() != static_cast<size_t>(num_joints_ + num_grippers_)) {
+        RCLCPP_ERROR_STREAM(this->get_logger(), "Acceleration size not correct for waypoint index " << i
+                            << ", got " << cmd_waypoint.accelerations.size() << " (should be " << num_joints_ + num_grippers_ << ")");
+        result->success = false;
+        goal_handle->abort(result);
+
+        // Reset active action flag
+        has_active_action_ = false;
+        return;
       }
 
-      updateJointWaypoints(use_traj_times, wp_times, pos, vel, accel);
+      for (size_t j = 0; j < static_cast<size_t>(num_joints_); ++j) {
+        pos(j, i) = cmd_waypoint.positions[j];
+        vel(j, i) = cmd_waypoint.velocities[j];
+        accel(j, i) = cmd_waypoint.accelerations[j];
+      }
+
+      if (gripper_)
+        gripper_states(0, i) = cmd_waypoint.positions[num_joints_];  // Assuming gripper is the last joint
     }
+
+    updateJointWaypoints(use_traj_times, wp_times, pos, vel, accel, gripper_states, gripper_ != nullptr);
+
+    // Set LEDs to a particular color, or clear them.
+    Color color;
+    if (goal->set_color)
+      color = Color(goal->r, goal->g, goal->b, 255);
+    setColor(color);
+
+    while (!arm_->atGoal() && rclcpp::ok()) {
+      // Check if there is a cancel request
+      if (goal_handle->is_canceling()) {
+        stopArm();
+        result->success = false;
+        goal_handle->canceled(result);
+        setColor({0, 0, 0, 0});
+        RCLCPP_INFO(this->get_logger(), "Arm motion was cancelled");
+        
+        // Reset active action flag
+        has_active_action_ = false;
+        return;
+      }
+
+      // Check if compliant mode is active
+      if (compliant_mode_) {
+        result->success = false;
+        goal_handle->abort(result);
+        setColor({0, 0, 0, 0});
+        RCLCPP_INFO(this->get_logger(), "Arm motion was aborted due to compliant mode activation");
+        
+        // Reset active action flag
+        has_active_action_ = false;
+        return;
+      }
+
+      // Update and publish progress in feedback
+      feedback->percent_complete = arm_->goalProgress() * 100.0;
+      goal_handle->publish_feedback(feedback);      
+
+      // Limit feedback rate
+      r.sleep();
+    }
+
+    // Publish when the arm is done with a motion
+    if (rclcpp::ok()) {
+      result->success = true;
+      goal_handle->succeed(result);
+      RCLCPP_INFO(this->get_logger(), "Completed arm motion action");
+      setColor({0, 0, 0, 0});
+      // Reset active action flag
+      has_active_action_ = false;
+    }
+
+  }
+
+  rclcpp_action::GoalResponse handleSE3MotionGoal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const ArmSE3Motion::Goal> goal) {
+    RCLCPP_INFO(this->get_logger(), "Received arm SE3 motion action request");
+    (void)uuid;
+    if (!checkActionConditions("arm SE3 motion")) {
+      return rclcpp_action::GoalResponse::REJECT;
+    }
+    if (goal->waypoints.points.empty()) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm SE3 motion action request - no waypoints specified");
+      return rclcpp_action::GoalResponse::REJECT;
+    }
+    return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+  }
+
+  rclcpp_action::CancelResponse handleSE3MotionCancel(const std::shared_ptr<GoalHandleArmSE3Motion> goal_handle) {
+    RCLCPP_INFO(this->get_logger(), "Received request to cancel arm SE3 motion action");
+    (void)goal_handle;
+    return rclcpp_action::CancelResponse::ACCEPT;
+  }
+
+  void handleSE3MotionAccepted(const std::shared_ptr<GoalHandleArmSE3Motion> goal_handle) {
+    // this needs to return quickly to avoid blocking the executor
+    // spin up a new thread to execute the action
+    std::thread{std::bind(&ArmNode::startArmSE3Motion, this, std::placeholders::_1), goal_handle}.detach();
+  }
+
+  void startArmSE3Motion(const std::shared_ptr<GoalHandleArmSE3Motion> goal_handle) {
+    RCLCPP_INFO(this->get_logger(), "Executing arm SE3 motion action");
+
+    // Set active action flag
+    has_active_action_ = true;
+
+    // Wait until the action is complete, sending status/feedback along the way.
+    rclcpp::Rate r(10);
+
+    const auto goal = goal_handle->get_goal();
+    auto feedback = std::make_shared<ArmSE3Motion::Feedback>();
+    auto result = std::make_shared<ArmSE3Motion::Result>();
+
+    // Replan a smooth joint trajectory from the current location through a
+    // series of cartesian waypoints.
+    // TODO: use a single struct instead of 6 single vectors of the same length;
+    // but how do we do hierarchial actions?
+    auto num_waypoints = goal->waypoints.points.size();
+
+    Eigen::VectorXd wp_times(num_waypoints);
+    bool use_traj_times = goal->use_wp_times;
+
+    // Get each waypoint in cartesian space
+    Eigen::Matrix3Xd xyz_positions(3, num_waypoints);
+    Eigen::Matrix3Xd euler_angles(3, num_waypoints);
+    Eigen::MatrixXd gripper_states(1, num_waypoints);
+    for (size_t i = 0; i < num_waypoints; ++i) {
+      if (use_traj_times) {
+        wp_times(i) = goal->waypoints.points[i].time_from_start.sec + goal->waypoints.points[i].time_from_start.nanosec * 1e-9;
+      }
+      xyz_positions(0, i) = goal->waypoints.points[i].x;
+      xyz_positions(1, i) = goal->waypoints.points[i].y;
+      xyz_positions(2, i) = goal->waypoints.points[i].z;
+      euler_angles(0, i) = goal->waypoints.points[i].roll;
+      euler_angles(1, i) = goal->waypoints.points[i].pitch;
+      euler_angles(2, i) = goal->waypoints.points[i].yaw;
+      if (gripper_)
+        gripper_states(0, i) = goal->waypoints.points[i].gripper;
+    }
+
+    updateSE3Waypoints(use_traj_times, wp_times, xyz_positions, &euler_angles, false, gripper_states, gripper_ != nullptr);
 
     // Set LEDs to a particular color, or clear them.
     Color color;
@@ -478,23 +659,19 @@ private:
       response->success = false;
       response->message = "Arm not initialized yet!";
     }
-
-    if (!home_position_available_) {
+    else if (!home_position_available_) {
       RCLCPP_ERROR_STREAM(this->get_logger(), "Home position was not set in the config file!");
       return;
     }
-
-    if (compliant_mode_) {
+    else if (compliant_mode_) {
       response->success = false;
       response->message = "Arm in compliant mode, cannot home arm";
     }
-
-    if (has_active_action_) {
+    else if (has_active_action_) {
       response->success = false;
       response->message = "Arm is executing an action, cannot home arm";
     }
-
-    if (is_homing_) {
+    else if (is_homing_) {
       response->success = false;
       response->message = "Arm is currently homing";
     }
@@ -520,13 +697,11 @@ private:
       response->success = false;
       response->message = "Arm not initialized yet!";
     }
-
-    if (compliant_mode_) {
+    else if (compliant_mode_) {
       response->success = false;
       response->message = "Arm in compliant mode, nothing to stop";
     }
-
-    if (has_active_action_) {
+    else if (has_active_action_) {
       response->success = false;
       response->message = "Cannot stop using /stop service, cancel the active action to stop arm motion";
     }
@@ -541,6 +716,31 @@ private:
     response->message = "Stopped arm motion";
   }
 
+  // Service callback for gripper control
+  void gripperCallback(const std::shared_ptr<std_srvs::srv::SetBool::Request> request, std::shared_ptr<std_srvs::srv::SetBool::Response> response) {
+    (void)request;
+
+    response->success = true;
+
+    if (!gripper_) {
+      response->success = false;
+      response->message = "Gripper not available, cannot control gripper";
+    }
+
+    if (!response->success) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), response->message);
+      return;
+    }
+
+    if (!request->data) {
+      gripper_->open();
+      response->message = "Gripper opened";
+    } else {
+      gripper_->close();
+      response->message = "Gripper closed";
+    }
+  }
+
   //////////////////////// SUBSCRIBER CALLBACK FUNCTIONS ////////////////////////
 
   // Common subscriber condition checks for the arm
@@ -549,27 +749,22 @@ private:
       RCLCPP_ERROR(this->get_logger(), "Arm is not initialized yet!");
       return false;
     }
-
     if (compliant_mode_) {
       RCLCPP_ERROR_STREAM(this->get_logger(), "Arm in compliant mode, ignoring " << topic_name);
       return false;
     }
-
     if (has_active_action_) {
       RCLCPP_ERROR_STREAM(this->get_logger(), "Arm is executing an action, ignoring " << topic_name);
       return false;
     }
-
     if (is_homing_) {
       RCLCPP_ERROR_STREAM(this->get_logger(), "Arm is currently homing, ignoring " << topic_name);
       return false;
     }
-
     if (has_active_topic_commands_ && active_command_topic_ != topic_name) {
       RCLCPP_ERROR_STREAM(this->get_logger(), "Arm is currently receiving topic commands at " << active_command_topic_ << ", ignoring " << topic_name);
       return false;
     }
-    
     if (!has_active_topic_commands_) {
       // Set the target position to current position before starting a new command
       arm_->FK(arm_->lastFeedback().getPositionCommand(), target_xyz, target_rotmat);
@@ -584,7 +779,7 @@ private:
   }
 
   // Callback for trajectories with joint angle waypoints
-  void jointWaypointsCallback(const trajectory_msgs::msg::JointTrajectory::SharedPtr joint_trajectory) {
+  void jointTrajectoryCallback(const trajectory_msgs::msg::JointTrajectory::SharedPtr joint_trajectory) {
 
     if (!checkArmConditions("joint_trajectory"))
       return;
@@ -595,21 +790,31 @@ private:
     }
 
     // Print length of trajectory
-    RCLCPP_INFO_STREAM(this->get_logger(), "Received trajectory with " << joint_trajectory->points.size() << " waypoints");
+    RCLCPP_INFO_STREAM(this->get_logger(), "Received joint trajectory with " << joint_trajectory->points.size() << " waypoints");
 
     auto num_waypoints = joint_trajectory->points.size();
+    Eigen::VectorXd times(num_waypoints);
     Eigen::MatrixXd pos(num_joints_, num_waypoints);
     Eigen::MatrixXd vel(num_joints_, num_waypoints);
     Eigen::MatrixXd accel(num_joints_, num_waypoints);
-    Eigen::VectorXd times(num_waypoints);
+    Eigen::MatrixXd gripper_states(num_grippers_, num_waypoints);
 
     for (size_t waypoint = 0; waypoint < num_waypoints; ++waypoint) {
       auto& cmd_waypoint = joint_trajectory->points[waypoint];
 
-      if (cmd_waypoint.positions.size() != static_cast<size_t>(num_joints_) ||
-          cmd_waypoint.velocities.size() != static_cast<size_t>(num_joints_) ||
-          cmd_waypoint.accelerations.size() != static_cast<size_t>(num_joints_)) {
-        RCLCPP_ERROR_STREAM(this->get_logger(), "Position, velocity, and acceleration sizes not correct for waypoint index " << waypoint);
+      if (cmd_waypoint.positions.size() != static_cast<size_t>(num_joints_ + num_grippers_)) {
+        RCLCPP_ERROR_STREAM(this->get_logger(), "Position size not correct for waypoint index " << waypoint
+                            << ", got " << cmd_waypoint.positions.size() << " (should be " << num_joints_ + num_grippers_ << ")");
+        return;
+      }
+      if (cmd_waypoint.velocities.size() != static_cast<size_t>(num_joints_ + num_grippers_)) {
+        RCLCPP_ERROR_STREAM(this->get_logger(), "Velocity size not correct for waypoint index " << waypoint
+                            << ", got " << cmd_waypoint.velocities.size() << " (should be " << num_joints_ + num_grippers_ << ")");
+        return;
+      }
+      if (cmd_waypoint.accelerations.size() != static_cast<size_t>(num_joints_ + num_grippers_)) {
+        RCLCPP_ERROR_STREAM(this->get_logger(), "Acceleration size not correct for waypoint index " << waypoint
+                            << ", got " << cmd_waypoint.accelerations.size() << " (should be " << num_joints_ + num_grippers_ << ")");
         return;
       }
 
@@ -624,12 +829,15 @@ private:
       }
 
       times(waypoint) = cmd_waypoint.time_from_start.sec + cmd_waypoint.time_from_start.nanosec * 1e-9;
+
+      if (gripper_)
+        gripper_states(0, waypoint) = cmd_waypoint.positions[num_joints_];  // Assuming gripper is the last joint
     }
-    updateJointWaypoints(true, times, pos, vel, accel);
+    updateJointWaypoints(true, times, pos, vel, accel, gripper_states, gripper_ != nullptr);
   }
 
   // Callback for trajectories with cartesian position waypoints
-  void cartesianWaypointsCallback(const trajectory_msgs::msg::JointTrajectory::SharedPtr target_waypoints) {
+  void cartesianTrajectoryCallback(const hebi_msgs::msg::SE3Trajectory::SharedPtr target_waypoints) {
 
     if (!checkArmConditions("cartesian_trajectory"))
       return;
@@ -639,23 +847,29 @@ private:
       return;
     }
 
+    // Print length of trajectory
+    RCLCPP_INFO_STREAM(this->get_logger(), "Received cartesian trajectory with " << target_waypoints->points.size() << " waypoints");
+
     // Fill in an Eigen::Matrix3xd with the xyz goal
     size_t num_waypoints = target_waypoints->points.size();
+    Eigen::VectorXd times(num_waypoints);
     Eigen::Matrix3Xd xyz_positions(3, num_waypoints);
     Eigen::Matrix3Xd euler_angles(3, num_waypoints);
-    Eigen::VectorXd times(num_waypoints);
+    Eigen::MatrixXd gripper_states(1, num_waypoints);
     for (size_t i = 0; i < num_waypoints; ++i) {
       times(i) = target_waypoints->points[i].time_from_start.sec + target_waypoints->points[i].time_from_start.nanosec * 1e-9;
-      xyz_positions(0, i) = target_waypoints->points[i].positions[0];
-      xyz_positions(1, i) = target_waypoints->points[i].positions[1];
-      xyz_positions(2, i) = target_waypoints->points[i].positions[2];
-      euler_angles(0, i) = target_waypoints->points[i].positions[3];
-      euler_angles(1, i) = target_waypoints->points[i].positions[4];
-      euler_angles(2, i) = target_waypoints->points[i].positions[5];
+      xyz_positions(0, i) = target_waypoints->points[i].x;
+      xyz_positions(1, i) = target_waypoints->points[i].y;
+      xyz_positions(2, i) = target_waypoints->points[i].z;
+      euler_angles(0, i) = target_waypoints->points[i].roll;
+      euler_angles(1, i) = target_waypoints->points[i].pitch;
+      euler_angles(2, i) = target_waypoints->points[i].yaw;
+      if (gripper_)
+        gripper_states(0, i) = target_waypoints->points[i].gripper;
     }
 
     // Replan
-    updateSE3Waypoints(use_traj_times_, times, xyz_positions, &euler_angles, true);
+    updateSE3Waypoints(use_traj_times_, times, xyz_positions, &euler_angles, true, gripper_states, gripper_ != nullptr);
   }
 
   // "Jog" the arm along each joint
@@ -787,6 +1001,17 @@ private:
     // NOTE: Cannot set pending command here, as there is no assurance it will not get overwritten by arm_->update()
   }
 
+  // Control the gripper
+  void gripperCommandCallback(const std_msgs::msg::Float64::SharedPtr gripper_msg) {
+    if (!gripper_) {
+      RCLCPP_ERROR(this->get_logger(), "Gripper not enabled in this arm configuration! Ignoring command");
+      return;
+    }
+
+    // Set the gripper position
+    gripper_->setState(gripper_msg->data);
+  }
+
   /////////////////////////// UTILITY FUNCTIONS ///////////////////////////
 
   void publishState() {
@@ -797,9 +1022,9 @@ private:
     const auto vel = fdbk.getVelocity();
     const auto eff = fdbk.getEffort();
 
-    state_msg_.position.resize(pos.size());
-    state_msg_.velocity.resize(vel.size());
-    state_msg_.effort.resize(eff.size());
+    state_msg_.position.resize(pos.size() + num_grippers_);
+    state_msg_.velocity.resize(vel.size() + num_grippers_);
+    state_msg_.effort.resize(eff.size() + num_grippers_);
     state_msg_.header.stamp = this->now();
     state_msg_.header.frame_id = "base_link";
 
@@ -807,7 +1032,19 @@ private:
     Eigen::VectorXd::Map(&state_msg_.velocity[0], vel.size()) = vel;
     Eigen::VectorXd::Map(&state_msg_.effort[0], eff.size()) = eff;
 
+    if (gripper_) {
+      state_msg_.position.back() = gripper_->getState();
+      state_msg_.velocity.back() = std::numeric_limits<double>::quiet_NaN(); // Gripper velocity not available
+      state_msg_.effort.back() = std::numeric_limits<double>::quiet_NaN(); // Gripper effort not available
+    }
+
     arm_state_pub_->publish(state_msg_);
+
+    // Publish Gripper State
+    if (gripper_) {
+      gripper_state_msg_.data = gripper_->getState();
+      gripper_state_publisher_->publish(gripper_state_msg_);
+    }
 
     // Publish End Effector Pose
     Eigen::Vector3d cur_pose;
@@ -815,18 +1052,17 @@ private:
     arm_->FK(pos, cur_pose, cur_orientation);
     Eigen::Quaterniond cur_orientation_quat(cur_orientation);
 
-    geometry_msgs::msg::PoseStamped pose_msg;
-    pose_msg.header.frame_id = "base_link";
-    pose_msg.header.stamp = this->now();
-    pose_msg.pose.position.x = cur_pose[0];
-    pose_msg.pose.position.y = cur_pose[1];
-    pose_msg.pose.position.z = cur_pose[2];
-    pose_msg.pose.orientation.x = cur_orientation_quat.x();
-    pose_msg.pose.orientation.y = cur_orientation_quat.y();
-    pose_msg.pose.orientation.z = cur_orientation_quat.z();
-    pose_msg.pose.orientation.w = cur_orientation_quat.w();
+    ee_pose_msg_.header.frame_id = "base_link";
+    ee_pose_msg_.header.stamp = this->now();
+    ee_pose_msg_.pose.position.x = cur_pose[0];
+    ee_pose_msg_.pose.position.y = cur_pose[1];
+    ee_pose_msg_.pose.position.z = cur_pose[2];
+    ee_pose_msg_.pose.orientation.x = cur_orientation_quat.x();
+    ee_pose_msg_.pose.orientation.y = cur_orientation_quat.y();
+    ee_pose_msg_.pose.orientation.z = cur_orientation_quat.z();
+    ee_pose_msg_.pose.orientation.w = cur_orientation_quat.w();
 
-    end_effector_pose_publisher_->publish(pose_msg);
+    end_effector_pose_publisher_->publish(ee_pose_msg_);
 
     // Publish Raw End-Effector Wrench    
     Eigen::MatrixXd ee_jacobian;
@@ -843,17 +1079,16 @@ private:
     Eigen::VectorXd eff_cmd = fdbk.getEffortCommand();
     Eigen::VectorXd ee_wrench = ee_jacobian_t_pinv * (eff_cmd - eff);
     
-    geometry_msgs::msg::WrenchStamped ee_wrench_msg;
-    ee_wrench_msg.header.stamp = this->now();
-    ee_wrench_msg.header.frame_id = "base_link";
-    ee_wrench_msg.wrench.force.x = ee_wrench(0);
-    ee_wrench_msg.wrench.force.y = ee_wrench(1);
-    ee_wrench_msg.wrench.force.z = ee_wrench(2);
-    ee_wrench_msg.wrench.torque.x = ee_wrench(3);
-    ee_wrench_msg.wrench.torque.y = ee_wrench(4);
-    ee_wrench_msg.wrench.torque.z = ee_wrench(5);
+    ee_wrench_msg_.header.stamp = this->now();
+    ee_wrench_msg_.header.frame_id = "base_link";
+    ee_wrench_msg_.wrench.force.x = ee_wrench(0);
+    ee_wrench_msg_.wrench.force.y = ee_wrench(1);
+    ee_wrench_msg_.wrench.force.z = ee_wrench(2);
+    ee_wrench_msg_.wrench.torque.x = ee_wrench(3);
+    ee_wrench_msg_.wrench.torque.y = ee_wrench(4);
+    ee_wrench_msg_.wrench.torque.z = ee_wrench(5);
     
-    ee_wrench_publisher_->publish(ee_wrench_msg);
+    ee_wrench_publisher_->publish(ee_wrench_msg_);
 
     // Calculate end-effector force based on end-effector position error
     Eigen::Vector3d ee_pos_cmd;
@@ -861,14 +1096,13 @@ private:
     arm_->FK(fdbk.getPositionCommand(), ee_pos_cmd, ee_orientation_cmd);
     Eigen::Vector3d pos_error = cur_pose - ee_pos_cmd;
 
-    geometry_msgs::msg::Vector3Stamped ee_force_msg;
-    ee_force_msg.header.stamp = this->now();
-    ee_force_msg.header.frame_id = "base_link";
-    ee_force_msg.vector.x = pos_error(0);
-    ee_force_msg.vector.y = pos_error(1);
-    ee_force_msg.vector.z = pos_error(2);
+    ee_force_msg_.header.stamp = this->now();
+    ee_force_msg_.header.frame_id = "base_link";
+    ee_force_msg_.vector.x = pos_error(0);
+    ee_force_msg_.vector.y = pos_error(1);
+    ee_force_msg_.vector.z = pos_error(2);
 
-    ee_force_publisher_->publish(ee_force_msg);
+    ee_force_publisher_->publish(ee_force_msg_);
 
     // Publish Center of Mass
     auto& model = arm_->robotModel();
@@ -895,9 +1129,8 @@ private:
     center_of_mass_publisher_->publish(center_of_mass_message_);
 
     // Publish Goal Progress
-    std_msgs::msg::Float64 goal_progress_msg;
-    goal_progress_msg.data = arm_->goalProgress();
-    goal_progress_publisher_->publish(goal_progress_msg);
+    goal_progress_msg_.data = arm_->goalProgress();
+    goal_progress_publisher_->publish(goal_progress_msg_);
 
     // Reset active command state
     if (this->now().seconds() - last_active_command_time_ > topic_command_timeout_s_) {
@@ -914,25 +1147,60 @@ private:
     }
   }
 
+  bool isValidTimes(const Eigen::VectorXd& times) {
+    // Check if the times vector is empty
+    if (times.size() == 0) {
+      RCLCPP_ERROR(this->get_logger(), "Times vector is empty");
+      return false;
+    }
+
+    // Check if all times are non-negative
+    const double epsilon = 1e-2; // Small value to consider as zero
+    for (size_t i = 0; i < times.size(); ++i) {
+      if (times(i) < 0.0) {
+        RCLCPP_ERROR_STREAM(this->get_logger(), "Negative time value at index " << i << ": " << times(i));
+        return false;
+      }
+      if (i > 0 && times(i) - times(i - 1) < epsilon) {
+        RCLCPP_ERROR_STREAM(this->get_logger(), "Times vector is not monotonically increasing at index " << i << ": " << times(i) << " < " << times(i - 1));
+        return false;
+      }
+    }
+
+    return true;
+  }
+
   // Each row is a separate joint; each column is a separate waypoint.
-  void updateJointWaypoints(const bool use_traj_times, const Eigen::VectorXd& times, const Eigen::MatrixXd& angles, const Eigen::MatrixXd& velocities, const Eigen::MatrixXd& accelerations) {
+  void updateJointWaypoints(const bool use_traj_times, const Eigen::VectorXd& times, const Eigen::MatrixXd& positions, const Eigen::MatrixXd& velocities, const Eigen::MatrixXd& accelerations, const Eigen::MatrixXd& gripper_states = Eigen::MatrixXd(), bool use_gripper_states = false) {
     // Data sanity check:
-    if (angles.rows() != velocities.rows()                    || // Number of joints
-        angles.rows() != accelerations.rows()                 ||
-        angles.rows() != static_cast<long int>(arm_->size())  ||
-        angles.cols() != velocities.cols()                    || // Number of waypoints
-        angles.cols() != accelerations.cols()                 ||
-        angles.cols() != times.size()                         ||
-        angles.cols() == 0) {
-      RCLCPP_ERROR(this->get_logger(), "Angles, velocities, accelerations, or times were not the correct size");
+    if (!isValidTimes(times)) {
+      RCLCPP_ERROR(this->get_logger(), "Invalid times vector provided");
+      return;
+    }
+    if (positions.rows() != velocities.rows()                        || // Number of joints
+        positions.rows() != accelerations.rows()                     ||
+        positions.rows() != static_cast<long int>(arm_->size())      ||
+        positions.cols() != velocities.cols()                        || // Number of waypoints
+        positions.cols() != accelerations.cols()                     ||
+        positions.cols() != times.size()                             ||
+        positions.cols() == 0                                        ||
+        (gripper_states.size() != times.size() && use_gripper_states)
+      ) {
+      RCLCPP_ERROR(this->get_logger(), "Positions, velocities, accelerations, times, or gripper states were not the correct size");
       return;
     }
 
     // Replan:
     if (use_traj_times) {
-      arm_->setGoal(arm::Goal::createFromWaypoints(times, angles, velocities, accelerations));
+      if (use_gripper_states)
+        arm_->setGoal(arm::Goal::createFromWaypointsWithAux(times, positions, velocities, accelerations, gripper_states));
+      else
+        arm_->setGoal(arm::Goal::createFromWaypoints(times, positions, velocities, accelerations));
     } else {
-      arm_->setGoal(arm::Goal::createFromWaypoints(angles, velocities, accelerations));
+      if (use_gripper_states)
+        arm_->setGoal(arm::Goal::createFromWaypointsWithAux(positions, velocities, accelerations, gripper_states));
+      else
+        arm_->setGoal(arm::Goal::createFromWaypoints(positions, velocities, accelerations));
     }
   }
   
@@ -940,8 +1208,12 @@ private:
   // Replan a smooth joint trajectory from the current location through a
   // series of cartesian waypoints.
   // xyz positions should be a 3xn vector of target positions
-  void updateSE3Waypoints(const bool use_traj_times, const Eigen::VectorXd& times, const Eigen::Matrix3Xd& xyz_positions, const Eigen::Matrix3Xd* euler_angles = nullptr, const bool pureCartesian = false) {
+  void updateSE3Waypoints(const bool use_traj_times, const Eigen::VectorXd& times, const Eigen::Matrix3Xd& xyz_positions, const Eigen::Matrix3Xd* euler_angles = nullptr, const bool pureCartesian = false, const Eigen::MatrixXd& gripper_states = Eigen::MatrixXd(), bool use_gripper_states = false) {
     // Data sanity check:
+    if (!isValidTimes(times)) {
+      RCLCPP_ERROR(this->get_logger(), "Invalid times vector provided");
+      return;
+    }
     if (euler_angles && euler_angles->cols() != xyz_positions.cols())
       return;
 
@@ -963,15 +1235,12 @@ private:
       last_position = arm_->lastFeedback().getPosition();
     }
 
-    int min_num_joints = 6;
-    if(pureCartesian)
-    {
-      min_num_joints = 3;
-    }
+    int min_num_joints_required = 6;
+    if(pureCartesian) min_num_joints_required = 3;
 
     // For each waypoint, find the joint angles to move to it, starting from the last
     // waypoint, and save into the position vector.
-    if (euler_angles && num_joints_ >= min_num_joints) {
+    if (euler_angles && num_joints_ >= min_num_joints_required) {
       // If we are given tip directions, add these too...
       for (size_t i = 0; i < static_cast<size_t>(num_waypoints); ++i) {
 
@@ -1015,11 +1284,23 @@ private:
       }
     }
 
+    Eigen::MatrixXd nan_matrix(positions.rows(), positions.cols());
+    nan_matrix.setConstant(std::numeric_limits<double>::quiet_NaN());
+    nan_matrix.rightCols<1>().setZero();
+
     // Replan:
-    if (use_traj_times)
-      arm_->setGoal(arm::Goal::createFromPositions(times, positions));
-    else
-      arm_->setGoal(arm::Goal::createFromPositions(positions));
+    if (use_traj_times) {
+      if (use_gripper_states)
+        arm_->setGoal(arm::Goal::createFromWaypointsWithAux(times, positions, nan_matrix, nan_matrix, gripper_states));
+      else
+        arm_->setGoal(arm::Goal::createFromWaypoints(times, positions, nan_matrix, nan_matrix));
+    }
+    else {
+      if (use_gripper_states)
+        arm_->setGoal(arm::Goal::createFromWaypointsWithAux(positions, nan_matrix, nan_matrix, gripper_states));
+      else
+        arm_->setGoal(arm::Goal::createFromWaypoints(positions, nan_matrix, nan_matrix));
+    }
   }
 
   void homeArm() {
@@ -1050,7 +1331,7 @@ private:
     if (is_homing_) is_homing_ = false; // If we were homing, stop the homing process
   }
 
-  /////////////////// Initialize arm ///////////////////
+  /////////////////// Initialize arm and gripper ///////////////////
   bool initializeArm() {
 
     // Validate the configuration before proceeding
@@ -1078,43 +1359,31 @@ private:
     arm_ = arm::Arm::create(*arm_config);
     // Terminate if arm not found
     if (!arm_) {
-      RCLCPP_ERROR(this->get_logger(), "Failed to create arm!");
+      RCLCPP_ERROR(this->get_logger(), "Failed to create arm! Please check if the modules are available on the network and the config file is correct.");
       return false;
     }
     RCLCPP_INFO(this->get_logger(), "Arm connected.");
     num_joints_ = arm_->size();
     arm_->update();
 
+    auto arm_config_user_data = arm_config->getUserData();
+
     // Check if home position is provided
-    if (arm_config->getUserData().hasFloatList("home_position")) {
+    if (arm_config_user_data.hasFloatList("home_position")) {
 
       // Check that home_position has the right length
-      if (arm_config->getUserData().getFloatList("home_position").size() != num_joints_) {
+      if (arm_config_user_data.getFloatList("home_position").size() != num_joints_) {
         RCLCPP_ERROR(this->get_logger(), "HEBI config \"user_data\"'s \"home_position\" field must have the same number of elements as degrees of freedom! Ignoring...");
         home_position_.fill(std::numeric_limits<double>::quiet_NaN());
       }
       else {
-        home_position_ = Eigen::Map<Eigen::VectorXd>(arm_config->getUserData().getFloatList("home_position").data(), arm_config->getUserData().getFloatList("home_position").size());
+        home_position_ = Eigen::Map<Eigen::VectorXd>(arm_config_user_data.getFloatList("home_position").data(), arm_config_user_data.getFloatList("home_position").size());
         home_position_available_ = true;
         RCLCPP_INFO(this->get_logger(), "Found and successfully read 'home_position' parameter.");
       }
     } else {
       RCLCPP_WARN(this->get_logger(), "\"home_position\" not provided in config file. Not traveling to home.");
       home_position_.fill(std::numeric_limits<double>::quiet_NaN());
-    }
-
-    // Check if IK seed is provided
-    if (arm_config->getUserData().hasFloatList("ik_seed_pos")) {
-
-      // Check if ik_seed has the right length
-      if (arm_config->getUserData().getFloatList("ik_seed_pos").size() != num_joints_) {
-        RCLCPP_ERROR(this->get_logger(), "HEBI config \"user_data\"'s \"ik_seed\" field must have the same number of elements as degrees of freedom! Ignoring...");
-        use_ik_seed_ = false;
-      }
-      else {
-        ik_seed_ = Eigen::Map<Eigen::VectorXd>(arm_config->getUserData().getFloatList("ik_seed_pos").data(), arm_config->getUserData().getFloatList("ik_seed_pos").size());
-        RCLCPP_INFO(this->get_logger(), "Found and successfully read 'ik_seed' parameter. Set `use_ik_seed` parameter to true to use it.");
-      }
     }
 
     // Get the "use_ik_seed" parameter
@@ -1124,6 +1393,36 @@ private:
       RCLCPP_WARN(this->get_logger(), "Could not find/read 'use_ik_seed' parameter; Setting use_ik_seed to false!");
       use_ik_seed_ = false;
     }
+    
+    // Check if IK seed is provided
+    if (arm_config_user_data.hasFloatList("ik_seed_pos")) {
+      // Check if ik_seed has the right length
+      auto ik_seed_pos = arm_config_user_data.getFloatList("ik_seed_pos");
+      if (ik_seed_pos.empty()) {
+        RCLCPP_ERROR(this->get_logger(), "HEBI config \"user_data\"'s \"ik_seed\" field is empty! Ignoring...");
+        use_ik_seed_ = false;
+      }
+      else if (ik_seed_pos.size() != num_joints_) {
+        RCLCPP_ERROR(this->get_logger(), "HEBI config \"user_data\"'s \"ik_seed\" field must have the same number of elements as degrees of freedom! Ignoring...");
+        use_ik_seed_ = false;
+      }
+      else if (std::any_of(ik_seed_pos.begin(), ik_seed_pos.end(), [](float val) { return !std::isfinite(val); })) {
+        RCLCPP_ERROR(this->get_logger(), "HEBI config \"user_data\"'s \"ik_seed\" field contains non-finite values! Ignoring...");
+        use_ik_seed_ = false;
+      }
+      else {
+        ik_seed_ = Eigen::Map<Eigen::VectorXd>(ik_seed_pos.data(), ik_seed_pos.size());
+        RCLCPP_INFO(this->get_logger(), "Found and successfully read 'ik_seed' parameter. Set `use_ik_seed` parameter to true to use it.");
+      }
+    }
+    else {
+      RCLCPP_WARN(this->get_logger(), "\"ik_seed_pos\" not provided in config file. Not using IK seed.");
+      use_ik_seed_ = false; // Default to false if not provided
+      ik_seed_.fill(std::numeric_limits<double>::quiet_NaN());
+    }
+
+    this->set_parameter(rclcpp::Parameter("use_ik_seed", use_ik_seed_));
+    this->set_parameter(rclcpp::Parameter("ik_seed", std::vector<double>(ik_seed_.data(), ik_seed_.data() + ik_seed_.size())));
 
     // Get the "use_traj_times" for the arm
     if (this->has_parameter("use_traj_times")) {
@@ -1139,13 +1438,82 @@ private:
       this->get_parameter("prefix", prefix);
     }
 
+    // Create gripper if requested
+    std::string gripper_name = "gripperSpool";  // Kept outside the if statement to use it later in state_msg names
+    if (use_gripper_) {
+      // Get the "has_gripper" parameter
+      if (!arm_config_user_data.hasBool("has_gripper")) {
+        RCLCPP_WARN(this->get_logger(), "Gripper not configured in the arm config file, ignoring gripper commands");
+        use_gripper_ = false;
+        return true; // No gripper to initialize
+      }
+      if (!arm_config_user_data.getBool("has_gripper")) {
+        RCLCPP_WARN(this->get_logger(), "`has_gripper` is set to false in the arm config file, ignoring gripper commands");
+        use_gripper_ = false;
+        return true; // No gripper to initialize
+      }
+
+      std::string gripper_family = arm_config->getFamilies()[0];
+      if (arm_config_user_data.hasString("gripper_family")) {
+        gripper_family = arm_config_user_data.getString("gripper_family");
+      }
+      if (arm_config_user_data.hasString("gripper_name")) {
+        gripper_name = arm_config_user_data.getString("gripper_name");
+      }
+      double gripper_close_effort = 1.0;
+      if (arm_config_user_data.hasFloat("gripper_close_effort")) {
+        gripper_close_effort = arm_config_user_data.getFloat("gripper_close_effort");
+      }
+      double gripper_open_effort = -5.0;
+      if (arm_config_user_data.hasFloat("gripper_open_effort")) {
+        gripper_open_effort = arm_config_user_data.getFloat("gripper_open_effort");
+      }
+
+      // Create gripper from config
+      gripper_ = arm::Gripper::create(
+        gripper_family,
+        gripper_name,
+        gripper_close_effort,
+        gripper_open_effort
+      );
+
+      if (!gripper_) {
+        RCLCPP_ERROR(this->get_logger(), "Failed to create gripper! Please check if the gripper is available on the network and the config file is correct.");
+        return false;
+      }
+      RCLCPP_INFO(this->get_logger(), "Gripper connected.");
+
+      std::string gripper_gains_file = arm_config->getGains("gripper");
+      if (!gripper_gains_file.empty()) {
+        RCLCPP_INFO(this->get_logger(), "Loading gripper gains from: %s", gripper_gains_file.c_str());
+        if (gripper_->loadGains(gripper_gains_file)) {
+          RCLCPP_INFO(this->get_logger(), "Gripper gains loaded successfully.");
+        } else {
+          RCLCPP_ERROR(this->get_logger(), "Failed to load gripper gains");
+          return false;
+        }
+      }
+
+      gripper_->open(); // Open the gripper by default
+      if (!gripper_->send()) {
+        RCLCPP_WARN(this->get_logger(), "Could not send gripper command! Please check connection");
+      }
+      
+      arm_->setEndEffector(gripper_);
+      num_grippers_ = 1;
+    }
+
     // Make a list of family/actuator formatted names for the JointState publisher
     std::vector<std::string> full_names;
     for (size_t idx = 0; idx < arm_config->getNames().size(); ++idx) {
       full_names.push_back(prefix + arm_config->getNames().at(idx));
     }
+    if (gripper_) {
+      full_names.push_back(prefix + gripper_name); // Add gripper name to the list
+    }
     // TODO: Figure out a way to get link names from the arm, so it doesn't need to be input separately
     state_msg_.name = full_names;
+
     return true;
   }
 };
@@ -1158,7 +1526,6 @@ int main(int argc, char ** argv) {
   auto node = std::make_shared<hebi::ros::ArmNode>();
 
   while (rclcpp::ok()) {
-
     node->update();
     // Call any pending callbacks (note -- this may update our planned motion)
     rclcpp::spin_some(node);
