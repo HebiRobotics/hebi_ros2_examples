@@ -16,7 +16,8 @@
 #include <std_msgs/msg/float64.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include <std_srvs/srv/set_bool.hpp>
-#include <hebi_msgs/action/arm_motion.hpp>
+#include <hebi_msgs/action/arm_joint_motion.hpp>
+#include <hebi_msgs/action/arm_se3_motion.hpp>
 
 #include "hebi_cpp_api/group_command.hpp"
 #include "hebi_cpp_api/robot_model.hpp"
@@ -31,8 +32,10 @@ namespace ros {
 
 class ArmNode : public rclcpp::Node {
 public:
-  using ArmMotion = hebi_msgs::action::ArmMotion;
-  using GoalHandleArmMotion = rclcpp_action::ServerGoalHandle<ArmMotion>;
+  using ArmJointMotion = hebi_msgs::action::ArmJointMotion;
+  using GoalHandleArmJointMotion = rclcpp_action::ServerGoalHandle<ArmJointMotion>;
+  using ArmSE3Motion = hebi_msgs::action::ArmSE3Motion;
+  using GoalHandleArmSE3Motion = rclcpp_action::ServerGoalHandle<ArmSE3Motion>;
   
   ArmNode() : Node("arm_node") {
 
@@ -119,13 +122,20 @@ public:
       gripper_service_ = this->create_service<std_srvs::srv::SetBool>("gripper", std::bind(&ArmNode::gripperCallback, this, std::placeholders::_1, std::placeholders::_2));
     }
     
-    // Start the action server
-    action_server_ = rclcpp_action::create_server<ArmMotion>(
+    // Action servers
+    joint_action_server_ = rclcpp_action::create_server<ArmJointMotion>(
       this,
-      "arm_motion",
-      std::bind(&ArmNode::handleArmMotionGoal, this, std::placeholders::_1, std::placeholders::_2),
-      std::bind(&ArmNode::handleArmMotionCancel, this, std::placeholders::_1),
-      std::bind(&ArmNode::handleArmMotionAccepted, this, std::placeholders::_1)
+      "joint_motion",
+      std::bind(&ArmNode::handleJointMotionGoal, this, std::placeholders::_1, std::placeholders::_2),
+      std::bind(&ArmNode::handleJointMotionCancel, this, std::placeholders::_1),
+      std::bind(&ArmNode::handleJointMotionAccepted, this, std::placeholders::_1)
+    );
+    se3_action_server_ = rclcpp_action::create_server<ArmSE3Motion>(
+      this,
+      "cartesian_motion",
+      std::bind(&ArmNode::handleSE3MotionGoal, this, std::placeholders::_1, std::placeholders::_2),
+      std::bind(&ArmNode::handleSE3MotionCancel, this, std::placeholders::_1),
+      std::bind(&ArmNode::handleSE3MotionAccepted, this, std::placeholders::_1)
     );
 
     timer_ = this->create_wall_timer(std::chrono::milliseconds(5), std::bind(&ArmNode::publishState, this));
@@ -213,7 +223,8 @@ private:
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr goal_progress_publisher_;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr gripper_state_publisher_;
 
-  rclcpp_action::Server<hebi_msgs::action::ArmMotion>::SharedPtr action_server_;
+  rclcpp_action::Server<hebi_msgs::action::ArmJointMotion>::SharedPtr joint_action_server_;
+  rclcpp_action::Server<hebi_msgs::action::ArmSE3Motion>::SharedPtr se3_action_server_;
 
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr home_service_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stop_service_;
@@ -338,55 +349,58 @@ private:
 
   //////////////////////// ACTION HANDLER FUNCTIONS ////////////////////////
 
-  rclcpp_action::GoalResponse handleArmMotionGoal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const ArmMotion::Goal> goal) {
-    RCLCPP_INFO(this->get_logger(), "Received arm motion action request");
-    (void)uuid;
+  bool checkActionConditions(std::string action_name) {
     if (!arm_initialized_) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - arm not initialized!");
-      return rclcpp_action::GoalResponse::REJECT;
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting " << action_name << " action request - arm not initialized!");
+      return false;
     }
     if (compliant_mode_) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - in compliant mode!");
-      return rclcpp_action::GoalResponse::REJECT;
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting " << action_name << " action request - in compliant mode!");
+      return false;
     }
     if (has_active_action_) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - arm already has an active trajectory!");
-      return rclcpp_action::GoalResponse::REJECT;
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting " << action_name << " action request - arm already has an active trajectory!");
+      return false;
     }
     if (is_homing_) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - arm is currently homing!");
-      return rclcpp_action::GoalResponse::REJECT;
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting " << action_name << " action request - arm is currently homing!");
+      return false;
     }
     if (has_active_topic_commands_) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - arm is currently receiving topic commands!");
-      return rclcpp_action::GoalResponse::REJECT;
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting " << action_name << " action request - arm is currently receiving topic commands!");
+      return false;
     }
-    if (goal->wp_type != ArmMotion::Goal::CARTESIAN_SPACE && goal->wp_type != ArmMotion::Goal::JOINT_SPACE) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - invalid waypoint type, should be 'CARTESIAN' or 'JOINT'");
+    return true;
+  }
+
+  rclcpp_action::GoalResponse handleJointMotionGoal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const ArmJointMotion::Goal> goal) {
+    RCLCPP_INFO(this->get_logger(), "Received arm joint motion action request");
+    (void)uuid;
+    if (!checkActionConditions("arm joint motion")) {
       return rclcpp_action::GoalResponse::REJECT;
     }
     if (goal->waypoints.points.empty()) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - no waypoints specified");
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm joint motion action request - no waypoints specified");
       return rclcpp_action::GoalResponse::REJECT;
     }
     return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
   }
 
-  rclcpp_action::CancelResponse handleArmMotionCancel(const std::shared_ptr<GoalHandleArmMotion> goal_handle) {
+  rclcpp_action::CancelResponse handleJointMotionCancel(const std::shared_ptr<GoalHandleArmJointMotion> goal_handle) {
     RCLCPP_INFO(this->get_logger(), "Received request to cancel arm motion action");
     (void)goal_handle;
     return rclcpp_action::CancelResponse::ACCEPT;
   }
 
-  void handleArmMotionAccepted(const std::shared_ptr<GoalHandleArmMotion> goal_handle) {
+  void handleJointMotionAccepted(const std::shared_ptr<GoalHandleArmJointMotion> goal_handle) {
     // this needs to return quickly to avoid blocking the executor
     // spin up a new thread to execute the action
-    std::thread{std::bind(&ArmNode::startArmMotion, this, std::placeholders::_1), goal_handle}.detach();
+    std::thread{std::bind(&ArmNode::startArmJointMotion, this, std::placeholders::_1), goal_handle}.detach();
   }
 
-  void startArmMotion(const std::shared_ptr<GoalHandleArmMotion> goal_handle) {
-    RCLCPP_INFO(this->get_logger(), "Executing arm motion action");
-    
+  void startArmJointMotion(const std::shared_ptr<GoalHandleArmJointMotion> goal_handle) {
+    RCLCPP_INFO(this->get_logger(), "Executing arm joint motion action");
+
     // Set active action flag
     has_active_action_ = true;
 
@@ -394,8 +408,8 @@ private:
     rclcpp::Rate r(10);
 
     const auto goal = goal_handle->get_goal();
-    auto feedback = std::make_shared<ArmMotion::Feedback>();
-    auto result = std::make_shared<ArmMotion::Result>();
+    auto feedback = std::make_shared<ArmJointMotion::Feedback>();
+    auto result = std::make_shared<ArmJointMotion::Result>();
 
     // Replan a smooth joint trajectory from the current location through a
     // series of cartesian waypoints.
@@ -406,57 +420,180 @@ private:
     Eigen::VectorXd wp_times(num_waypoints);
     bool use_traj_times = goal->use_wp_times;
 
-    int waypoint_type = goal->wp_type;
+    // Get each waypoint in joint space
+    Eigen::MatrixXd pos(num_joints_, num_waypoints);
+    Eigen::MatrixXd vel(num_joints_, num_waypoints);
+    Eigen::MatrixXd accel(num_joints_, num_waypoints);
+    Eigen::MatrixXd gripper_states(num_grippers_, num_waypoints);
 
-    if (waypoint_type == ArmMotion::Goal::CARTESIAN_SPACE) {
-      // Get each waypoint in cartesian space
-      Eigen::Matrix3Xd xyz_positions(3, num_waypoints);
-      Eigen::Matrix3Xd euler_angles(3, num_waypoints);
-      for (size_t i = 0; i < num_waypoints; ++i) {
-        if (use_traj_times) {
-          wp_times(i) = goal->waypoints.points[i].time_from_start.sec + goal->waypoints.points[i].time_from_start.nanosec * 1e-9;
-        }
-        xyz_positions(0, i) = goal->waypoints.points[i].positions[0];
-        xyz_positions(1, i) = goal->waypoints.points[i].positions[1];
-        xyz_positions(2, i) = goal->waypoints.points[i].positions[2];
-        euler_angles(0, i) = goal->waypoints.points[i].positions[3];
-        euler_angles(1, i) = goal->waypoints.points[i].positions[4];
-        euler_angles(2, i) = goal->waypoints.points[i].positions[5];
+    for (size_t i = 0; i < num_waypoints; ++i) {
+      if (use_traj_times) {
+        wp_times(i) = goal->waypoints.points[i].time_from_start.sec + goal->waypoints.points[i].time_from_start.nanosec * 1e-9;
       }
 
-      updateSE3Waypoints(use_traj_times, wp_times, xyz_positions, &euler_angles, false);
-    } else if (waypoint_type == ArmMotion::Goal::JOINT_SPACE) {
-      // Get each waypoint in joint space
-      Eigen::MatrixXd pos(num_joints_, num_waypoints);
-      Eigen::MatrixXd vel(num_joints_, num_waypoints);
-      Eigen::MatrixXd accel(num_joints_, num_waypoints);
+      auto cmd_waypoint = goal->waypoints.points[i];
 
-      for (size_t i = 0; i < num_waypoints; ++i) {
-        if (use_traj_times) {
-          wp_times(i) = goal->waypoints.points[i].time_from_start.sec + goal->waypoints.points[i].time_from_start.nanosec * 1e-9;
-        }
-        
-        if (goal->waypoints.points[i].positions.size() != static_cast<size_t>(num_joints_) ||
-            goal->waypoints.points[i].velocities.size() != static_cast<size_t>(num_joints_) ||
-            goal->waypoints.points[i].accelerations.size() != static_cast<size_t>(num_joints_)) {
-          RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm motion action request - Position, velocity, and acceleration sizes not correct for waypoint index");
-          result->success = false;
-          goal_handle->abort(result);
+      if (cmd_waypoint.positions.size() != static_cast<size_t>(num_joints_ + num_grippers_)) {
+        RCLCPP_ERROR_STREAM(this->get_logger(), "Position size not correct for waypoint index " << i
+                            << ", got " << cmd_waypoint.positions.size() << " (should be " << num_joints_ + num_grippers_ << ")");
+        result->success = false;
+        goal_handle->abort(result);
 
-          // Reset active action flag
-          has_active_action_ = false;
-          return;
-        }
+        // Reset active action flag
+        has_active_action_ = false;
+        return;
+      }
+      if (cmd_waypoint.velocities.size() != static_cast<size_t>(num_joints_ + num_grippers_)) {
+        RCLCPP_ERROR_STREAM(this->get_logger(), "Velocity size not correct for waypoint index " << i
+                            << ", got " << cmd_waypoint.velocities.size() << " (should be " << num_joints_ + num_grippers_ << ")");
+        result->success = false;
+        goal_handle->abort(result);
 
-        for (size_t j = 0; j < static_cast<size_t>(num_joints_); ++j) {
-          pos(j, i) = goal->waypoints.points[i].positions[j];
-          vel(j, i) = goal->waypoints.points[i].velocities[j];
-          accel(j, i) = goal->waypoints.points[i].accelerations[j];
-        }
+        // Reset active action flag
+        has_active_action_ = false;
+        return;
+      }
+      if (cmd_waypoint.accelerations.size() != static_cast<size_t>(num_joints_ + num_grippers_)) {
+        RCLCPP_ERROR_STREAM(this->get_logger(), "Acceleration size not correct for waypoint index " << i
+                            << ", got " << cmd_waypoint.accelerations.size() << " (should be " << num_joints_ + num_grippers_ << ")");
+        result->success = false;
+        goal_handle->abort(result);
+
+        // Reset active action flag
+        has_active_action_ = false;
+        return;
       }
 
-      updateJointWaypoints(use_traj_times, wp_times, pos, vel, accel);
+      for (size_t j = 0; j < static_cast<size_t>(num_joints_); ++j) {
+        pos(j, i) = cmd_waypoint.positions[j];
+        vel(j, i) = cmd_waypoint.velocities[j];
+        accel(j, i) = cmd_waypoint.accelerations[j];
+      }
+
+      if (gripper_)
+        gripper_states(0, i) = cmd_waypoint.positions[num_joints_];  // Assuming gripper is the last joint
     }
+
+    updateJointWaypoints(use_traj_times, wp_times, pos, vel, accel, gripper_states, gripper_ != nullptr);
+
+    // Set LEDs to a particular color, or clear them.
+    Color color;
+    if (goal->set_color)
+      color = Color(goal->r, goal->g, goal->b, 255);
+    setColor(color);
+
+    while (!arm_->atGoal() && rclcpp::ok()) {
+      // Check if there is a cancel request
+      if (goal_handle->is_canceling()) {
+        stopArm();
+        result->success = false;
+        goal_handle->canceled(result);
+        setColor({0, 0, 0, 0});
+        RCLCPP_INFO(this->get_logger(), "Arm motion was cancelled");
+        
+        // Reset active action flag
+        has_active_action_ = false;
+        return;
+      }
+
+      // Check if compliant mode is active
+      if (compliant_mode_) {
+        result->success = false;
+        goal_handle->abort(result);
+        setColor({0, 0, 0, 0});
+        RCLCPP_INFO(this->get_logger(), "Arm motion was aborted due to compliant mode activation");
+        
+        // Reset active action flag
+        has_active_action_ = false;
+        return;
+      }
+
+      // Update and publish progress in feedback
+      feedback->percent_complete = arm_->goalProgress() * 100.0;
+      goal_handle->publish_feedback(feedback);      
+
+      // Limit feedback rate
+      r.sleep();
+    }
+
+    // Publish when the arm is done with a motion
+    if (rclcpp::ok()) {
+      result->success = true;
+      goal_handle->succeed(result);
+      RCLCPP_INFO(this->get_logger(), "Completed arm motion action");
+      setColor({0, 0, 0, 0});
+      // Reset active action flag
+      has_active_action_ = false;
+    }
+
+  }
+
+  rclcpp_action::GoalResponse handleSE3MotionGoal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const ArmSE3Motion::Goal> goal) {
+    RCLCPP_INFO(this->get_logger(), "Received arm SE3 motion action request");
+    (void)uuid;
+    if (!checkActionConditions("arm SE3 motion")) {
+      return rclcpp_action::GoalResponse::REJECT;
+    }
+    if (goal->waypoints.points.empty()) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm SE3 motion action request - no waypoints specified");
+      return rclcpp_action::GoalResponse::REJECT;
+    }
+    return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+  }
+
+  rclcpp_action::CancelResponse handleSE3MotionCancel(const std::shared_ptr<GoalHandleArmSE3Motion> goal_handle) {
+    RCLCPP_INFO(this->get_logger(), "Received request to cancel arm SE3 motion action");
+    (void)goal_handle;
+    return rclcpp_action::CancelResponse::ACCEPT;
+  }
+
+  void handleSE3MotionAccepted(const std::shared_ptr<GoalHandleArmSE3Motion> goal_handle) {
+    // this needs to return quickly to avoid blocking the executor
+    // spin up a new thread to execute the action
+    std::thread{std::bind(&ArmNode::startArmSE3Motion, this, std::placeholders::_1), goal_handle}.detach();
+  }
+
+  void startArmSE3Motion(const std::shared_ptr<GoalHandleArmSE3Motion> goal_handle) {
+    RCLCPP_INFO(this->get_logger(), "Executing arm SE3 motion action");
+
+    // Set active action flag
+    has_active_action_ = true;
+
+    // Wait until the action is complete, sending status/feedback along the way.
+    rclcpp::Rate r(10);
+
+    const auto goal = goal_handle->get_goal();
+    auto feedback = std::make_shared<ArmSE3Motion::Feedback>();
+    auto result = std::make_shared<ArmSE3Motion::Result>();
+
+    // Replan a smooth joint trajectory from the current location through a
+    // series of cartesian waypoints.
+    // TODO: use a single struct instead of 6 single vectors of the same length;
+    // but how do we do hierarchial actions?
+    auto num_waypoints = goal->waypoints.points.size();
+
+    Eigen::VectorXd wp_times(num_waypoints);
+    bool use_traj_times = goal->use_wp_times;
+
+    // Get each waypoint in cartesian space
+    Eigen::Matrix3Xd xyz_positions(3, num_waypoints);
+    Eigen::Matrix3Xd euler_angles(3, num_waypoints);
+    Eigen::MatrixXd gripper_states(1, num_waypoints);
+    for (size_t i = 0; i < num_waypoints; ++i) {
+      if (use_traj_times) {
+        wp_times(i) = goal->waypoints.points[i].time_from_start.sec + goal->waypoints.points[i].time_from_start.nanosec * 1e-9;
+      }
+      xyz_positions(0, i) = goal->waypoints.points[i].x;
+      xyz_positions(1, i) = goal->waypoints.points[i].y;
+      xyz_positions(2, i) = goal->waypoints.points[i].z;
+      euler_angles(0, i) = goal->waypoints.points[i].roll;
+      euler_angles(1, i) = goal->waypoints.points[i].pitch;
+      euler_angles(2, i) = goal->waypoints.points[i].yaw;
+      if (gripper_)
+        gripper_states(0, i) = goal->waypoints.points[i].gripper;
+    }
+
+    updateSE3Waypoints(use_traj_times, wp_times, xyz_positions, &euler_angles, false, gripper_states, gripper_ != nullptr);
 
     // Set LEDs to a particular color, or clear them.
     Color color;

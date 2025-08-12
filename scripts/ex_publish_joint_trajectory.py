@@ -11,8 +11,8 @@ class TrajectoryPublisher(Node):
   def __init__(self):
     super().__init__('trajectory_publisher')
     self.publisher_ = self.create_publisher(JointTrajectory, '/joint_trajectory', 10)
-    self.dt = 0.1
-    self.t = 1.0
+    self.dt = 0.25
+    self.t = 2.0
 
     use_gripper = False
 
@@ -27,11 +27,11 @@ class TrajectoryPublisher(Node):
     point.time_from_start = Duration(sec=int(floor(self.t)), nanosec=int((self.t-floor(self.t))*1e9))
     trajectory_msg.points.append(point)
 
-    while (self.t <= 13.0):
+    while (self.t < 14.0):
       self.t += self.dt
       point = JointTrajectoryPoint()
-      point.positions = [pi/4 * sin(pi*(self.t-1.0)/4), 1.2, 1.8, 0.6, 1.5708, 0.0] + ([sin(pi*(self.t-1.0)/4)] if use_gripper else [])
-      point.velocities = [pi**2/16 * cos(pi*(self.t-1.0)/4), 0.0, 0.0, 0.0, 0.0, 0.0] + ([0.0] if use_gripper else [])
+      point.positions = [pi/4 * cos(pi*self.t/4.0), 1.2, 1.8, 0.6, 1.5708, 0.0] + ([cos(pi*self.t/2.0)] if use_gripper else [])
+      point.velocities = [-pi*pi/16 * sin(pi*self.t/4.0), 0.0, 0.0, 0.0, 0.0, 0.0] + ([0.0] if use_gripper else [])
       point.accelerations = [nan]*6 + ([nan] if use_gripper else [])
       point.time_from_start = Duration(sec=int(floor(self.t)), nanosec=int((self.t-floor(self.t))*1e9))
       trajectory_msg.points.append(point)
