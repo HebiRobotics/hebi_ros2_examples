@@ -1,6 +1,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include <ament_index_cpp/get_package_share_directory.hpp>
+#include <functional>
 
 #include <control_msgs/msg/joint_jog.hpp>
 #include <hebi_msgs/msg/se3_jog.hpp>
@@ -373,17 +374,64 @@ private:
     return true;
   }
 
-  rclcpp_action::GoalResponse handleJointMotionGoal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const ArmJointMotion::Goal> goal) {
-    RCLCPP_INFO(this->get_logger(), "Received arm joint motion action request");
-    (void)uuid;
-    if (!checkActionConditions("arm joint motion")) {
+  template <typename GoalT>
+  rclcpp_action::GoalResponse validateActionGoal(const std::string& action_name, const GoalT& goal) {
+    if (!checkActionConditions(action_name)) {
       return rclcpp_action::GoalResponse::REJECT;
     }
-    if (goal->waypoints.points.empty()) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm joint motion action request - no waypoints specified");
+    if (goal.waypoints.points.empty()) {
+      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting " << action_name << " action request - no waypoints specified");
       return rclcpp_action::GoalResponse::REJECT;
     }
     return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+  }
+
+  template <typename GoalHandleT, typename FeedbackT, typename ResultT>
+  void runMotionUntilDoneOrInterrupted(const std::shared_ptr<GoalHandleT>& goal_handle) {
+    rclcpp::Rate r(10);
+    auto feedback = std::make_shared<FeedbackT>();
+    auto result = std::make_shared<ResultT>();
+
+    while (!arm_->atGoal() && rclcpp::ok()) {
+      // Check if there is a cancel request
+      if (goal_handle->is_canceling()) {
+        stopArm();
+        result->success = false;
+        goal_handle->canceled(result);
+        setColor({0, 0, 0, 0});
+        RCLCPP_INFO(this->get_logger(), "Arm motion was cancelled");
+        return;
+      }
+
+      // Check if compliant mode is active
+      if (compliant_mode_) {
+        result->success = false;
+        goal_handle->abort(result);
+        setColor({0, 0, 0, 0});
+        RCLCPP_INFO(this->get_logger(), "Arm motion was aborted due to compliant mode activation");
+        return;
+      }
+
+      // Update and publish progress in feedback
+      feedback->percent_complete = arm_->goalProgress() * 100.0;
+      goal_handle->publish_feedback(feedback);
+
+      r.sleep();
+    }
+
+    // Publish when the arm is done with a motion
+    if (rclcpp::ok()) {
+      result->success = true;
+      goal_handle->succeed(result);
+      RCLCPP_INFO(this->get_logger(), "Completed arm motion action");
+      setColor({0, 0, 0, 0});
+    }
+  }
+
+  rclcpp_action::GoalResponse handleJointMotionGoal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const ArmJointMotion::Goal> goal) {
+    RCLCPP_INFO(this->get_logger(), "Received arm joint motion action request");
+    (void)uuid;
+    return validateActionGoal("arm joint motion", *goal);
   }
 
   rclcpp_action::CancelResponse handleJointMotionCancel(const std::shared_ptr<GoalHandleArmJointMotion> goal_handle) {
@@ -404,12 +452,7 @@ private:
     // Set active action flag
     has_active_action_ = true;
 
-    // Wait until the action is complete, sending status/feedback along the way.
-    rclcpp::Rate r(10);
-
     const auto goal = goal_handle->get_goal();
-    auto feedback = std::make_shared<ArmJointMotion::Feedback>();
-    auto result = std::make_shared<ArmJointMotion::Result>();
 
     // Replan a smooth joint trajectory from the current location through a
     // series of cartesian waypoints.
@@ -482,63 +525,16 @@ private:
       color = Color(goal->r, goal->g, goal->b, 255);
     setColor(color);
 
-    while (!arm_->atGoal() && rclcpp::ok()) {
-      // Check if there is a cancel request
-      if (goal_handle->is_canceling()) {
-        stopArm();
-        result->success = false;
-        goal_handle->canceled(result);
-        setColor({0, 0, 0, 0});
-        RCLCPP_INFO(this->get_logger(), "Arm motion was cancelled");
-        
-        // Reset active action flag
-        has_active_action_ = false;
-        return;
-      }
+    runMotionUntilDoneOrInterrupted<GoalHandleArmJointMotion, ArmJointMotion::Feedback, ArmJointMotion::Result>(goal_handle);
 
-      // Check if compliant mode is active
-      if (compliant_mode_) {
-        result->success = false;
-        goal_handle->abort(result);
-        setColor({0, 0, 0, 0});
-        RCLCPP_INFO(this->get_logger(), "Arm motion was aborted due to compliant mode activation");
-        
-        // Reset active action flag
-        has_active_action_ = false;
-        return;
-      }
-
-      // Update and publish progress in feedback
-      feedback->percent_complete = arm_->goalProgress() * 100.0;
-      goal_handle->publish_feedback(feedback);      
-
-      // Limit feedback rate
-      r.sleep();
-    }
-
-    // Publish when the arm is done with a motion
-    if (rclcpp::ok()) {
-      result->success = true;
-      goal_handle->succeed(result);
-      RCLCPP_INFO(this->get_logger(), "Completed arm motion action");
-      setColor({0, 0, 0, 0});
-      // Reset active action flag
-      has_active_action_ = false;
-    }
-
+    // Reset active action flag
+    has_active_action_ = false;
   }
 
   rclcpp_action::GoalResponse handleSE3MotionGoal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const ArmSE3Motion::Goal> goal) {
     RCLCPP_INFO(this->get_logger(), "Received arm SE3 motion action request");
     (void)uuid;
-    if (!checkActionConditions("arm SE3 motion")) {
-      return rclcpp_action::GoalResponse::REJECT;
-    }
-    if (goal->waypoints.points.empty()) {
-      RCLCPP_ERROR_STREAM(this->get_logger(), "Rejecting arm SE3 motion action request - no waypoints specified");
-      return rclcpp_action::GoalResponse::REJECT;
-    }
-    return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+    return validateActionGoal("arm SE3 motion", *goal);
   }
 
   rclcpp_action::CancelResponse handleSE3MotionCancel(const std::shared_ptr<GoalHandleArmSE3Motion> goal_handle) {
@@ -559,12 +555,7 @@ private:
     // Set active action flag
     has_active_action_ = true;
 
-    // Wait until the action is complete, sending status/feedback along the way.
-    rclcpp::Rate r(10);
-
     const auto goal = goal_handle->get_goal();
-    auto feedback = std::make_shared<ArmSE3Motion::Feedback>();
-    auto result = std::make_shared<ArmSE3Motion::Result>();
 
     // Replan a smooth joint trajectory from the current location through a
     // series of cartesian waypoints.
@@ -601,50 +592,10 @@ private:
       color = Color(goal->r, goal->g, goal->b, 255);
     setColor(color);
 
-    while (!arm_->atGoal() && rclcpp::ok()) {
-      // Check if there is a cancel request
-      if (goal_handle->is_canceling()) {
-        stopArm();
-        result->success = false;
-        goal_handle->canceled(result);
-        setColor({0, 0, 0, 0});
-        RCLCPP_INFO(this->get_logger(), "Arm motion was cancelled");
-        
-        // Reset active action flag
-        has_active_action_ = false;
-        return;
-      }
+    runMotionUntilDoneOrInterrupted<GoalHandleArmSE3Motion, ArmSE3Motion::Feedback, ArmSE3Motion::Result>(goal_handle);
 
-      // Check if compliant mode is active
-      if (compliant_mode_) {
-        result->success = false;
-        goal_handle->abort(result);
-        setColor({0, 0, 0, 0});
-        RCLCPP_INFO(this->get_logger(), "Arm motion was aborted due to compliant mode activation");
-        
-        // Reset active action flag
-        has_active_action_ = false;
-        return;
-      }
-
-      // Update and publish progress in feedback
-      feedback->percent_complete = arm_->goalProgress() * 100.0;
-      goal_handle->publish_feedback(feedback);      
-
-      // Limit feedback rate
-      r.sleep();
-    }
-
-    // Publish when the arm is done with a motion
-    if (rclcpp::ok()) {
-      result->success = true;
-      goal_handle->succeed(result);
-      RCLCPP_INFO(this->get_logger(), "Completed arm motion action");
-      setColor({0, 0, 0, 0});
-      // Reset active action flag
-      has_active_action_ = false;
-    }
-
+    // Reset active action flag
+    has_active_action_ = false;
   }
 
   ///////////////////////////// SERVICE CALLBACKS /////////////////////////////
@@ -1438,6 +1389,14 @@ private:
       this->get_parameter("prefix", prefix);
     }
 
+    // Make a list of family/actuator formatted names for the JointState publisher
+    std::vector<std::string> full_names;
+    for (size_t idx = 0; idx < arm_config->getNames().size(); ++idx) {
+      full_names.push_back(prefix + arm_config->getNames().at(idx));
+    }
+    // TODO: Figure out a way to get link names from the arm, so it doesn't need to be input separately
+    state_msg_.name = full_names;
+
     // Create gripper if requested
     std::string gripper_name = "gripperSpool";  // Kept outside the if statement to use it later in state_msg names
     if (use_gripper_) {
@@ -1503,16 +1462,9 @@ private:
       num_grippers_ = 1;
     }
 
-    // Make a list of family/actuator formatted names for the JointState publisher
-    std::vector<std::string> full_names;
-    for (size_t idx = 0; idx < arm_config->getNames().size(); ++idx) {
-      full_names.push_back(prefix + arm_config->getNames().at(idx));
-    }
     if (gripper_) {
-      full_names.push_back(prefix + gripper_name); // Add gripper name to the list
+      state_msg_.name.push_back(prefix + gripper_name); // Add gripper name to the list
     }
-    // TODO: Figure out a way to get link names from the arm, so it doesn't need to be input separately
-    state_msg_.name = full_names;
 
     return true;
   }
