@@ -1,17 +1,17 @@
 # HEBI ROS 2 Examples
 
-HEBI Arms can be controlled using ROS 2 in three methods:
+HEBI arms can be controlled with ROS 2 in three ways:
 - Standalone HEBI API
 - ROS 2 Control
 - MoveIt
 
-Each method offers unique advantages for different use cases and levels of integration with the ROS 2 ecosystem. The Standalone HEBI API provides direct control with HEBI C++ API, ROS 2 Control offers standardized interfaces, and MoveIt enables advanced motion planning capabilities.
+Each option offers unique advantages depending on your use case and the desired level of integration with the ROS 2 ecosystem. The standalone HEBI API provides direct control via the HEBI C++ API, ROS 2 Control offers standardized interfaces, and MoveIt provides advanced motion planning capabilities.
 
-For assistance or inquiries about implementing these control methods, please contact HEBI Robotics support at support@hebirobotics.com.
+For assistance or inquiries about implementing these approaches, contact HEBI Robotics support at support@hebirobotics.com.
 
 ## Setting up your Workspace
 
-Run the following commands to set up and download the HEBI ROS 2 packages:
+Run the following commands to set up and fetch the HEBI ROS 2 packages:
 ```bash
 # Create the workspace directory
 mkdir -p ~/hebi_ws/src
@@ -53,21 +53,20 @@ colcon build --symlink-install
 source install/setup.bash
 ```
 
-(Optional) Install `pip` dependencies for HRDF to URDF conversion script:
-
+(Optional) Install `pip` dependencies for the HRDF→URDF conversion script (only needed if you plan to auto-generate a URDF at launch):
 ```bash
-pip install -r src/hebi_ros2_examples/requirements.txt
+python3 -m pip install -r src/hebi_ros2_examples/requirements.txt
 ```
 
-You can skip this step in case you decide not to use the script. For more details, refer to [URDF Generation](#urdf-generation) section.
+You can skip this step if you do not use the conversion script. For details, see the [URDF Generation](#urdf-generation) section.
 
 ## Robot Description
 
 For standalone control using the HEBI ROS 2 API, only an HRDF (HEBI Robot Description Format) file is required. See the [HEBI Documentation](https://docs.hebi.us/tools.html#robot-description-format) for a detailed explanation of the HRDF format.
 
-However, for controlling using ROS 2 control, integrating with MoveIt, or simulating in environments such as Gazebo, a URDF file is necessary.
+However, for ROS 2 Control, MoveIt integration, or simulation using Gazebo, a URDF is necessary.
 
-The `hebi_description` package provides both HRDFs and URDFs for the standard HEBI arm kits.
+The `hebi_description` package provides both HRDFs and URDFs for standard HEBI arm kits.
 
 ### Non-standard Kits
 
@@ -76,7 +75,7 @@ If you are using a non-standard HEBI kit:
 2. **URDF Generation:** A conversion script is available in the `hebi_description` repository to convert HRDF to URDF. Refer to the documentation provided in `hebi_description` for usage instructions.
 
 ### Important Note
-While only HRDF is necessary when using the standalone ROS API, RViz visualization requires a URDF. The launch files include a `generate_urdf` argument (enabled by default) that automatically converts the HRDF to a URDF using the provided script, so you do not need to generate a URDF manually. See the [URDF Generation](#urdf-generation) section for more details.
+While only HRDF is necessary when using the standalone API, RViz visualization requires a URDF. The launch files include a `generate_urdf` argument (available, disabled by default) that can convert HRDF to URDF automatically, so you do not need to generate a URDF manually. See [URDF Generation](#urdf-generation) for details.
 
 ## Standalone HEBI ROS 2 API
 
@@ -134,55 +133,56 @@ plugins:
 ```
 
 Here are some key points to note:
-- The HEBI configuration files follow this naming convention: `<your_robot_name>.cfg.yaml` and placed in the `config/arms` directory within the `hebi_description` package
-- Ensure HRDF and gains file paths are relative to the config file
-- `names` and `families` of your modules can be found and changed using [HEBI Scope](https://docs.hebi.us/tools.html#scope-gui)
-- You can add `home_position` to `user_data` field for homing the arm on startup
-- The gripper family/name need not be added to the `names` and `families`. By default, the gripper module will be identified using the first string in your families list and with the name "gripperSpool"
-- For custom gripper family and name, you can specify them in the `user_data` field with keys `gripper_family` and `gripper_name` respectively
+- The HEBI configuration files follow this naming convention: `<your_robot_name>.cfg.yaml` and are placed in the `config/arms` directory of the `hebi_description` package.
+- Ensure HRDF and gains file paths are relative to the config file.
+- `names` and `families` of your modules can be found and changed using [HEBI Scope](https://docs.hebi.us/tools.html#scope-gui).
+- You can add `home_position` to the `user_data` field for homing the arm on startup.
+- The gripper family/name need not be added to `names` and `families`. By default, the gripper module will be identified using the first string in your `families` list and the name `gripperSpool`.
+- For a custom gripper family and name, specify `gripper_family` and `gripper_name` in `user_data`.
 
 ### Arm Node
 
 The HEBI C++ API is wrapped in ROS 2 within the `arm_node` (`src/kits/arms/arm_node.cpp`). This node, utilizing the HEBI Arm API, provides various topics, services, and actions for arm control:
 
 **Subscribers**
-- */SE3_jog [hebi_msgs/msg/SE3Jog]*: Command end effector jog in SE3 space (cartesian and rotation)
-- */cartesian_jog [hebi_msgs/msg/SE3Jog]*: Command end effector jog in cartesian space (x, y, z). Any angular displacement values set in the message are ignored
-- */cartesian_trajectory [hebi_msgs/msg/SE3Trajectory]*: Command a trajectory for the end effector in SE3 or Cartesian space, optionally including gripper states if applicable.
-- */joint_jog [control_msgs/msg/JointJog]*: Command jog in joint angles
-- */joint_trajectory [trajectory_msgs/msg/JointTrajectory]*: Commands a trajectory in joint space. If a gripper is present, its state can be included as the last joint in the trajectory.
-- */cmd_ee_wrench [geometry_msgs/msg/Wrench]*: Command end effector wrench (force and torque) in the base frame
-- */cmd_gripper [std_msgs/msg/Float64]*: Command gripper position (0 for fully open, 1 for fully closed)
+- */SE3_jog [hebi_msgs/msg/SE3Jog]*: Commands end effector jog in SE3 space (both Cartesian translation and rotation). Linear components are applied in the base frame, while angular components are applied in the end effector frame.
+- */cartesian_jog [hebi_msgs/msg/SE3Jog]*: Commands end effector jog in Cartesian space (x, y, z). Any angular displacement values in the message are ignored.
+- */cartesian_trajectory [hebi_msgs/msg/SE3Trajectory]*: Commands a trajectory for the end effector in SE3 or Cartesian space, optionally including gripper states if applicable.
+- */joint_jog [control_msgs/msg/JointJog]*: Commands joint jog by specifying incremental changes in joint angles.
+- */joint_trajectory [trajectory_msgs/msg/JointTrajectory]*: Commands a trajectory in joint space. If a gripper is present, its state should be included as the last joint in the trajectory.
+- */cmd_ee_wrench [geometry_msgs/msg/Wrench]*: Commands the end effector to apply a specified wrench (force and torque) in the base frame.
+- */cmd_gripper [std_msgs/msg/Float64]*: Commands the gripper position, where 0 represents fully open and 1 represents fully closed.
 
 **Publishers**
-- */joint_states [sensor_msgs/msg/JointState]*: Joint angles of the arm and, if present, the gripper state (ranging from 0 for fully open to 1 for fully closed)
-- */ee_pose [geometry_msgs/msg/PoseStamped]*: End effector pose in SE3 space
-- */ee_wrench [geometry_msgs/msg/WrenchStamped]*: End effector wrench (force and torque) feedback in the base frame, calculated from torque errors
-- */ee_force [geometry_msgs/msg/Vector3Stamped]*: End effector force (X, Y, Z components only), computed from the end effector position error. No scaling factor is applied; the output directly reflects the position errors.
-- */gripper_state [std_msgs/msg/Float64]*: Gripper state (0 for fully open, 1 for fully closed)
-- */inertia [geometry_msgs/msg/Inertia]*: Inertia of the arm
-- */goal_progress [std_msgs/msg/Float64]*: Progress of the current goal of the arm (0.0 to 1.0)
+- */joint_states [sensor_msgs/msg/JointState]*: Joint angles of the arm and, if present, the gripper state (ranging from 0 for fully open to 1 for fully closed).
+- */ee_pose [geometry_msgs/msg/PoseStamped]*: The pose of the end effector in SE3 space.
+- */ee_wrench [geometry_msgs/msg/WrenchStamped]*: End effector wrench (force and torque) feedback in the base frame, computed from joint torque errors.
+- */ee_force [geometry_msgs/msg/Vector3Stamped]*: End effector force (X, Y, Z components only), calculated based on the end effector position error. No scaling is applied; the output directly represents the position errors.
+- */gripper_state [std_msgs/msg/Float64]*: Current state of the gripper, where 0 represents fully open and 1 represents fully closed.
+- */inertia [geometry_msgs/msg/Inertia]*: Inertia of the arm.
+- */goal_progress [std_msgs/msg/Float64]*: Progress of the current arm goal, ranging from 0.0 (not started) to 1.0 (completed).
 
 **Action Servers**
-- */arm_motion [hebi_msgs/action/ArmMotion]*: Command an arm trajectory in either joint space or SE3 space
+- */joint_motion [hebi_msgs/action/ArmJointMotion]*: Commands an arm trajectory in joint space.
+- */cartesian_motion [hebi_msgs/action/ArmSE3Motion]*: Commands an arm trajectory in SE3 space.
 
 **Services**
-- */home [std_srvs/srv/Trigger]*: Home the arm
-- */stop [std_srvs/srv/Trigger]*: Stop arm motion (cannot stop action execution; cancel the action instead)
-- */gripper [std_srvs/srv/SetBool]*: Opens or closes the gripper (if available). Set to `true` to close the gripper and `false` to open it.
+- */home [std_srvs/srv/Trigger]*: Sends the arm to its predefined home position.
+- */stop [std_srvs/srv/Trigger]*: Stops the arm's motion. Note: This service cannot interrupt ongoing action execution; use action cancellation to stop an active action.
+- */gripper [std_srvs/srv/SetBool]*: Controls the gripper (if available). Set to `true` to close the gripper, or `false` to open it.
 
 **Parameters**
-- *config_package*: ROS package containing the config file
-- *config_file*: Config file path relative to `config_package`
-- *prefix*: Namespace for topics and prefix for joint names in `/joint_states`
-- *use_gripper*: When true, enables gripper support. Ensure that the `has_gripper` parameter in the `user_data` section of your config file is also set to true.
-- *compliant_mode*: When true, disables arm goals and sets joint efforts to zero for manual movement
-- *ik_seed*: Sets the IK seed for inverse kinematic calculations
-- *use_ik_seed*: When set to true, the node uses the IK seed specified by the `ik_seed` parameter for inverse kinematics calculations. If false, it uses the most recent joint feedback position as the IK seed.
-- *use_traj_times*: When set to true, the node uses the trajectory times specified by the `traj_times` parameter for trajectory execution. If false, it uses a default time based on a heuristic.
-- *topic_command_timeout*: Timeout in seconds for active topic commands. If no topic command is received within this time, the node resets the active command state, allowing new commands from actions or other topics.
+- *config_package*: The ROS package that contains the configuration file.
+- *config_file*: The path to the configuration file, relative to `config_package`.
+- *prefix*: Specifies the namespace for topics and serves as a prefix for joint names in `/joint_states`.
+- *use_gripper*: When set to true, enables gripper support. Make sure the `has_gripper` parameter in the `user_data` section of your configuration file is also set to true.
+- *compliant_mode*: When set to true, disables arm goals and sets joint efforts to zero, allowing the arm to be moved manually.
+- *ik_seed*: Specifies the initial joint positions (seed) used for inverse kinematics calculations.
+- *use_ik_seed*: When set to true, the node uses the IK seed specified by the `ik_seed` parameter for inverse kinematics calculations. If set to false, the node uses the most recent joint feedback positions as the IK seed.
+- *use_traj_times*: When set to true, the node uses the trajectory times specified by the `traj_times` parameter for executing trajectories. If set to false, a default time is used based on an internal heuristic.
+- *topic_command_timeout*: Specifies the timeout period (in seconds) for receiving topic commands. If no command is received within this interval, the node resets the active command state, allowing new commands from actions or other topics to be accepted.
 
-**NOTE:** The `config_package`, `config_file`, `prefix`, and `use_gripper` parameters are set during launch and should not be changed during runtime. On the other hand, `compliant_mode`, `ik_seed`, `use_ik_seed`, `use_traj_times`, and `topic_command_timeout` are dynamic parameters.
+**NOTE:** The `config_package`, `config_file`, `prefix`, and `use_gripper` parameters are specified at launch and should not be modified at runtime. However, `compliant_mode`, `ik_seed`, `use_ik_seed`, `use_traj_times`, and `topic_command_timeout` are dynamic parameters that can be adjusted while the node is running.
 
 ### Launching the Arm Node
 
@@ -190,39 +190,41 @@ To launch the arm node, use:
 ```bash
 ros2 launch hebi_ros2_examples arm.launch.py hebi_arm:=<your_robot_name>
 ```
-**NOTE:** Do not forget to build your workspace and source your setup before running the above command.
+**NOTE:** Remember to build your workspace and source your setup before running the above command.
 
 #### Launch Arguments
-
-| Argument | Default | Description |
-|----------|---------|-------------|
-| `hebi_arm` | (required) | Name of the robot to use |
-| `config_package` | `hebi_description` | ROS package containing the config file |
-| `config_file` | `<your_robot_name>.cfg.yaml` | Config file path relative to `config_package` |
-| `prefix` | `""` | Namespace for topics and prefix for joint names |
-| `use_gripper` | `false` | Whether to use the gripper (if available) |
-| `use_rviz` | `true` | Whether to start RViz |
-| `generate_urdf` | `true` | Generate URDF from HRDF or use pre-existing one |
+| Argument         | Default                      | Description                                                                   |
+|------------------|------------------------------|-------------------------------------------------------------------------------|
+| `hebi_arm`       | (required)                   | Name of the robot to use (e.g., A-2580-06).                                   |
+| `config_package` | `hebi_description`           | ROS package containing the configuration file.                                |
+| `config_file`    | `<your_robot_name>.cfg.yaml` | Path to the configuration file, relative to `config_package`.                 |
+| `prefix`         | `""`                         | Namespace for topics and prefix for joint names.                              |
+| `use_gripper`    | `false`                      | Enable gripper support (if available).                                        |
+| `use_rviz`       | `true`                       | Launch RViz for visualization.                                                |
+| `generate_urdf`  | `false`                      | Generate the URDF from the HRDF, or use a pre-existing URDF file.             |
 
 #### URDF Generation
 
 Both `arm.launch.py` and `arm_joystick_teleop.launch.py` include a parameter to control URDF generation:
 
-- When `generate_urdf:=true` (default): The launch file will automatically generate a URDF from the HRDF file specified in your config, and save it in a cache directory (`~/.cache/hebi/hebi_arm.urdf.xacro`).
-- When `generate_urdf:=false`: The launch file will use a pre-existing URDF from the description package located at `<description_package>/urdf/kits/<your_robot_name>.urdf.xacro`.
+- If `generate_urdf:=true`: The launch file will automatically generate a URDF from the HRDF file specified in your configuration and save it to a cache directory (`~/.cache/hebi/hebi_arm.urdf.xacro`).
+- If `generate_urdf:=false` (default): The launch file will use an existing URDF from the description package, located at `<description_package>/urdf/kits/<your_robot_name>.urdf.xacro`.
+
+> **Note:** The conversion script does not support all HRDF properties (e.g., `mass_offset`). As a result, it does not work for standard HEBI kits with grippers. Attempting to use `generate_urdf:=true` for kits with grippers will result in an error. Please use the existing URDF files for these kits until full support is added.
 
 ### Examples
 
-To get you started, we have provided several example scripts that use the `arm_node`:
+To help you get started, several example scripts are provided that demonstrate how to use the `arm_node`:
 
-1. `move_arm.cpp`: A C++ example that publishes a predefined trajectory using the `arm_motion` action
-2. `ex_publish_joint_trajectory.py`: A Python example that publishes a predefined sinusoidal trajectory to the `/joint_trajectory` topic, moving the base joint
-3. `ex_publish_cartesian_trajectory.py`: A Python example that publishes a predefined rectangular trajectory in the Y-Z plane to the `/cartesian_trajectory` topic
-4. `ex_teach_repeat_mobileio.py`: Uses HEBI Mobile IO to record and play trajectories, or go to saved waypoints
-5. `ex_teleop_mobileio.py`: Uses HEBI Mobile IO to send jog commands to control the arm in real-time
-6. `ex_haptic_teleop_node.py`: Uses a 3D Systems Touch X haptic device to control the arm in real-time with haptic feedback by sending jog commands while receiving force feedback from the `ee_wrench` topic
+1. `ex_arm_joint_motion.cpp`: A C++ example that commands a predefined sinusoidal trajectory using the `joint_motion` action.
+2. `ex_arm_cartesian_motion.cpp`: A C++ example that commands a predefined rectangular trajectory in the Y-Z plane using the `cartesian_motion` action.
+3. `ex_publish_joint_trajectory.py`: A Python example that commands a predefined sinusoidal trajectory (same as `ex_arm_joint_motion.cpp`) using the `/joint_trajectory` topic.
+4. `ex_publish_cartesian_trajectory.py`: A Python example that publishes a predefined rectangular trajectory in the Y-Z plane (same as `ex_arm_cartesian_motion.cpp`) using the `/cartesian_trajectory` topic.
+5. `ex_teach_repeat_mobileio.py`: Uses HEBI Mobile IO to record and play back trajectories or move the arm to saved waypoints.
+6. `ex_teleop_mobileio.py`: Uses HEBI Mobile IO to send jog commands for real-time arm control.
+7. `ex_haptic_teleop_node.py`: Uses a 3D Systems Touch X haptic device to control the arm in real time with haptic feedback, sending jog commands while receiving force feedback from the `ee_wrench` topic.
 
-## ROS2 Control
+## ROS 2 Control
 
 ### Additional Required Packages
 
@@ -249,7 +251,7 @@ For standard HEBI kits, these files are already provided in the `hebi_bringup` a
 
 ### ROS 2 Control Macro File
 
-This file defines hardware interfaces and plugins for your robot. The template below shows the structure for a HEBI Arm ROS2 Control Macro file:
+This file defines hardware interfaces and plugins for your robot. The template below shows the structure for a HEBI Arm ROS 2 Control macro file:
 ```
 <?xml version="1.0" encoding="UTF-8"?>
 <robot xmlns:xacro="http://wiki.ros.org/xacro">
@@ -287,13 +289,7 @@ This file defines hardware interfaces and plugins for your robot. The template b
           <plugin>hebi_hardware/HEBIHardwareInterface</plugin>
         </xacro:unless>
       </hardware>
-      <joint name="joint_1">
-        <command_interface name="position" />
-        <state_interface name="position">
-          <param name="initial_value">0.0</param>
-        </state_interface>
-        <state_interface name="velocity" />
-      </joint>
+
       <joint name="${prefix}<J1_name>">
         <command_interface name="position" />
         <command_interface name="velocity" />
@@ -307,7 +303,7 @@ This file defines hardware interfaces and plugins for your robot. The template b
       ...
       ...
       ...
-      <joint name="${prefix}<J1_name>">
+      <joint name="${prefix}<Jn_name>">
         <command_interface name="position" />
         <command_interface name="velocity" />
         <state_interface name="position">
@@ -333,19 +329,19 @@ This file defines hardware interfaces and plugins for your robot. The template b
     <!-- Gazebo Classic plugins -->
     ...
 
-    <!-- Gazebo plugins -->
+    <!-- Gazebo (Ignition/GZ) plugins -->
     ...
 
   </xacro:macro>
 </robot>
 ```
-**NOTE**: The gazebo classic and ignition plugins sections differ with each ROS version. Please refer to example files provided.
+**NOTE**: The Gazebo Classic and Ignition/GZ plugin sections differ by ROS distribution. Please refer to the example files provided.
 
-According to the package conventions, this file should be named as `<your_robot_name>.ros2_control.xacro` and placed in `urdf/kits/ros2_control` folder of the `hebi_decription` package.
+According to package conventions, name this file `<your_robot_name>.ros2_control.xacro` and place it in `urdf/kits/ros2_control` within the `hebi_description` package.
 
 ### ROS 2 Control URDF 
 
-This file combines the ROS2 control macro with the main robot URDF. Here's a template:
+This file combines the ROS 2 Control macro with the main robot URDF. Here's a template:
 ```
 <?xml version="1.0" encoding="UTF-8"?>
 <robot xmlns:xacro="http://wiki.ros.org/xacro" name="<your_robot_name>">
@@ -385,9 +381,9 @@ This file combines the ROS2 control macro with the main robot URDF. Here's a tem
 </robot>
 ```
 
-According to the package conventions, this file should be named as `<your_robot_name>.urdf.xacro` and placed in `urdf/kits/ros2_control` folder of the `hebi_decription` package.
+According to package conventions, name this file `<your_robot_name>.urdf.xacro` and place it in `urdf/kits/ros2_control` within the `hebi_description` package.
 
-### ROS2 Control Parameter File
+### ROS 2 Control Parameter File
 
 This YAML file configures the controllers used with your robot. Refer to the [ROS2 Controllers Documentation](https://control.ros.org/rolling/doc/ros2_controllers/doc/controllers_index.html#controllers-for-manipulators-and-other-robots) for detailed information.
 
@@ -489,7 +485,7 @@ To launch your HEBI arm in Gazebo Classic simulation:
 ```bash
 ros2 launch hebi_bringup bringup_arm_gazebo_classic.launch.py hebi_arm:=<your_robot_name>
 ```
-**NOTE:** Do not forget to build your workspace and source your setup before running the above commands.
+**NOTE:** Remember to build your workspace and source your setup before running the above commands.
 
 **Prerequisites:** Ensure you have Gazebo (`gazebo_ros`) and Gazebo ROS 2 Control (`gazebo_ros2_control`) installed. To install these packages, run:
 ```bash
@@ -520,7 +516,7 @@ For the newer Gazebo (formerly Ignition) simulation:
 ```bash
 ros2 launch hebi_bringup bringup_arm_gazebo.launch.py hebi_arm:=<your_robot_name>
 ```
-**NOTE:** Do not forget to build your workspace and source your setup before running the above commands.
+**NOTE:** Remember to build your workspace and source your setup before running the above commands.
 
 **Prerequisites:**
 Ensure you have Gazebo (`ros_gz`) and Gazebo ROS 2 Control (`ign_ros2_control` / `gz_ros2_control`) installed. To install these packages, run:
@@ -557,7 +553,7 @@ The setup process involves defining planning groups, robot poses, and end-effect
 
 ### Launching MoveIt with Hardware or Gazebo
 
-The URDF files in the MoveIt config directory do not have access to HEBI Hardware plugin or Gazebo plugins defined during ROS2 control URDF setup. To simplify the process of modifying URDF, SRDF, and launch files, we provide `move_group.launch.py` in the `hebi_bringup` package.
+The URDF files in the MoveIt config directory do not have access to the HEBI hardware plugin or Gazebo plugins defined during the ROS 2 Control URDF setup. To simplify modifying URDF, SRDF, and launch files, we provide `move_group.launch.py` in the `hebi_bringup` package.
 
 We use this launch file in parallel with `bringup_arm.launch.py` to launch MoveIt.
 

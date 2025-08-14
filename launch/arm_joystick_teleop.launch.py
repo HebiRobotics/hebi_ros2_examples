@@ -42,7 +42,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "generate_urdf",
-            default_value="true",
+            default_value="false",
             description="Generate URDF from HRDF or use pre-existing one."
         ),
     ]
