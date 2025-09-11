@@ -469,6 +469,9 @@ private:
     Eigen::MatrixXd accel(num_joints_, num_waypoints);
     Eigen::MatrixXd gripper_states(num_grippers_, num_waypoints);
 
+    // Create result object for error handling
+    auto result = std::make_shared<ArmJointMotion::Result>();
+
     for (size_t i = 0; i < num_waypoints; ++i) {
       if (use_traj_times) {
         wp_times(i) = goal->waypoints.points[i].time_from_start.sec + goal->waypoints.points[i].time_from_start.nanosec * 1e-9;
