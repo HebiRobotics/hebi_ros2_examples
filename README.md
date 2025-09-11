@@ -170,6 +170,7 @@ The HEBI C++ API is wrapped in ROS 2 within the `arm_node` (`src/kits/arms/arm_n
 - */home [std_srvs/srv/Trigger]*: Sends the arm to its predefined home position.
 - */stop [std_srvs/srv/Trigger]*: Stops the arm's motion. Note: This service cannot interrupt ongoing action execution; use action cancellation to stop an active action.
 - */gripper [std_srvs/srv/SetBool]*: Controls the gripper (if available). Set to `true` to close the gripper, or `false` to open it.
+- */toggle_plugin [hebi_msgs/srv/SetPluginEnabled]*: Enables or disables a specific plugin by name. Specify the `plugin_name` and `enabled` flag to control individual plugins at runtime.
 
 **Parameters**
 - *config_package*: The ROS package that contains the configuration file.

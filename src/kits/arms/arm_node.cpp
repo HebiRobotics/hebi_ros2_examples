@@ -17,6 +17,7 @@
 #include <std_msgs/msg/float64.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include <std_srvs/srv/set_bool.hpp>
+#include <hebi_msgs/srv/set_plugin_enabled.hpp>
 #include <hebi_msgs/action/arm_joint_motion.hpp>
 #include <hebi_msgs/action/arm_se3_motion.hpp>
 
@@ -119,6 +120,7 @@ public:
     // Services
     home_service_ = this->create_service<std_srvs::srv::Trigger>("home", std::bind(&ArmNode::homeCallback, this, std::placeholders::_1, std::placeholders::_2));
     stop_service_ = this->create_service<std_srvs::srv::Trigger>("stop", std::bind(&ArmNode::stopCallback, this, std::placeholders::_1, std::placeholders::_2));
+    toggle_plugin_service_ = this->create_service<hebi_msgs::srv::SetPluginEnabled>("toggle_plugin", std::bind(&ArmNode::togglePluginCallback, this, std::placeholders::_1, std::placeholders::_2));
     if (use_gripper_) {
       gripper_service_ = this->create_service<std_srvs::srv::SetBool>("gripper", std::bind(&ArmNode::gripperCallback, this, std::placeholders::_1, std::placeholders::_2));
     }
@@ -155,8 +157,13 @@ public:
     if (!arm_->update())
       RCLCPP_WARN(this->get_logger(), "Error Getting Feedback -- Check Connection");
     else {
+      // Calculate jacobian and joint efforts from desired end-effector wrench
+      Eigen::MatrixXd ee_jacobian;
+      arm_->robotModel().getJacobianEndEffector(arm_->lastFeedback().getPosition(), ee_jacobian);
+      Eigen::VectorXd cmd_joint_effort = ee_jacobian.transpose() * desired_ee_wrench_;
+      
       // Modify pending command here
-      arm_->pendingCommand().setEffort(arm_->pendingCommand().getEffort() + cmd_joint_effort_);
+      arm_->pendingCommand().setEffort(arm_->pendingCommand().getEffort() + cmd_joint_effort);
       // Send command
       if (!arm_->send())
         RCLCPP_WARN(this->get_logger(), "Error Sending Commands -- Check Connection");
@@ -178,7 +185,7 @@ private:
   Eigen::VectorXd home_position_{ Eigen::VectorXd::Constant(6, 0.01) }; // Default values are close to zero to avoid singularity
   bool home_position_available_{false};
   
-  Eigen::VectorXd cmd_joint_effort_{ Eigen::VectorXd::Zero(6) };
+  Eigen::VectorXd desired_ee_wrench_{ Eigen::VectorXd::Zero(6) };
   
   int num_joints_{0};
   int num_grippers_{0};
@@ -230,6 +237,7 @@ private:
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr home_service_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stop_service_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr gripper_service_;
+  rclcpp::Service<hebi_msgs::srv::SetPluginEnabled>::SharedPtr toggle_plugin_service_;
 
   rclcpp::TimerBase::SharedPtr timer_;
 
@@ -695,6 +703,44 @@ private:
     }
   }
 
+  // Service callback for plugin enable/disable control
+  void togglePluginCallback(const std::shared_ptr<hebi_msgs::srv::SetPluginEnabled::Request> request, std::shared_ptr<hebi_msgs::srv::SetPluginEnabled::Response> response) {
+    response->success = true;
+
+    if (!arm_initialized_) {
+      response->success = false;
+      response->message = "Arm not initialized yet!";
+      RCLCPP_ERROR_STREAM(this->get_logger(), response->message);
+      return;
+    }
+
+    // Get the plugin by name
+    auto plugin_weak_ptr = arm_->getPluginByName(request->plugin_name);
+    
+    if (plugin_weak_ptr.expired()) {
+      response->success = false;
+      response->message = "Plugin '" + request->plugin_name + "' not found!";
+      RCLCPP_ERROR_STREAM(this->get_logger(), response->message);
+      return;
+    }
+
+    // Get shared pointer from weak pointer
+    auto plugin = plugin_weak_ptr.lock();
+    if (!plugin) {
+      response->success = false;
+      response->message = "Plugin '" + request->plugin_name + "' is no longer valid!";
+      RCLCPP_ERROR_STREAM(this->get_logger(), response->message);
+      return;
+    }
+
+    // Set the enabled state
+    plugin->setEnabled(request->enabled);
+    
+    response->message = "Plugin '" + request->plugin_name + "' " + 
+                       (request->enabled ? "enabled" : "disabled") + " successfully";
+    RCLCPP_INFO_STREAM(this->get_logger(), response->message);
+  }
+
   //////////////////////// SUBSCRIBER CALLBACK FUNCTIONS ////////////////////////
 
   // Common subscriber condition checks for the arm
@@ -938,21 +984,14 @@ private:
     if (!checkArmConditions("cmd_ee_wrench"))
       return;
 
-    Eigen::VectorXd desired_ee_wrench(6);
-    desired_ee_wrench(0) = (*wrench_msg).force.x;
-    desired_ee_wrench(1) = (*wrench_msg).force.y;
-    desired_ee_wrench(2) = (*wrench_msg).force.z;
-    desired_ee_wrench(3) = (*wrench_msg).torque.x;
-    desired_ee_wrench(4) = (*wrench_msg).torque.y;
-    desired_ee_wrench(5) = (*wrench_msg).torque.z;
+    desired_ee_wrench_(0) = (*wrench_msg).force.x;
+    desired_ee_wrench_(1) = (*wrench_msg).force.y;
+    desired_ee_wrench_(2) = (*wrench_msg).force.z;
+    desired_ee_wrench_(3) = (*wrench_msg).torque.x;
+    desired_ee_wrench_(4) = (*wrench_msg).torque.y;
+    desired_ee_wrench_(5) = (*wrench_msg).torque.z;
 
-    Eigen::MatrixXd ee_jacobian;
-    arm_->robotModel().getJacobianEndEffector(arm_->lastFeedback().getPosition(), ee_jacobian);
-
-    // Compute torques from wrench
-    cmd_joint_effort_ = ee_jacobian.transpose() * desired_ee_wrench;
-
-    // NOTE: Cannot set pending command here, as there is no assurance it will not get overwritten by arm_->update()
+    // NOTE: This is converted to command efforts and set later in update() since we cannot set pending command here
   }
 
   // Control the gripper
