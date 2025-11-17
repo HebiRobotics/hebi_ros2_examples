@@ -24,13 +24,14 @@ public:
       this,
       "joint_motion");
 
-    this->use_gripper_ = false;  // Change to true if using a gripper
+    this->declare_parameter("use_gripper", false);
+    this->use_gripper_ = this->get_parameter("use_gripper").as_bool();
     
     this->timer_ = this->create_wall_timer(
       std::chrono::milliseconds(500),
       std::bind(&MoveArm::send_waypoints, this));
 
-    RCLCPP_INFO(this->get_logger(), "Initialized");
+    RCLCPP_INFO(this->get_logger(), "Initialized with use_gripper=%s", this->use_gripper_ ? "true" : "false");
 
   }
 
@@ -74,7 +75,7 @@ public:
       point.accelerations = {nan, nan, nan, nan, nan, nan};
       
       if (this->use_gripper_) {
-        point.positions.push_back(cos(M_PI*t/2.0));
+        point.positions.push_back((cos(M_PI*t/8.0) + 1.0) / 2.0);
         point.velocities.push_back(0.0);
         point.accelerations.push_back(nan);
       }
