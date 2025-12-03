@@ -227,6 +227,19 @@ To help you get started, several example scripts are provided that demonstrate h
 
 ## ROS 2 Control
 
+**⚠️ Important Note for ROS 2 Jazzy Users**
+
+ROS 2 Jazzy introduced stricter validation for node names, requiring only alphanumeric characters and underscores. If you're using ROS 2 Jazzy, ensure you have the latest version of the `hebi_description` package where hardware names in URDF files use underscores instead of hyphens (e.g., `A_2085_06` instead of `A-2085-06`).
+
+If you encounter an error when launching `bringup_arm.launch.py` such as:
+```
+Exception of type: N6rclcpp10exceptions20InvalidNodeNameErrorE occurred while initializing hardware 'A-2085-06': 
+Invalid node name: node name must not contain characters other than alphanumerics or '_':
+  'a-2085-06'
+```
+
+This indicates you need to update your `hebi_description` package. This issue is **specific to ROS 2 Jazzy** and does not affect ROS 2 Humble or Iron.
+
 ### Additional Required Packages
 
 To control HEBI arms using `ros2_control`, you need additional packages that aren't included in the basic setup:
@@ -470,8 +483,8 @@ ros2 launch hebi_bringup bringup_arm.launch.py hebi_arm:=<your_robot_name>
 | `controllers_file` | `config/<hebi_arm>_controllers.yaml` | Path to controller parameter file relative to `controllers_package` |
 | `use_mock_hardware` | `true` | Use mock hardware interface instead of real hardware |
 | `mock_sensor_commands` | `false` | Enable mock sensor commands (only applicable when `use_mock_hardware` is true) |
-| `robot_controller` | `hebi_arm_controller` | Name of the robot controller to use |
-| `use_gripper` | `false` | Whether to include a gripper controller in the setup |
+| `robot_controller` | Defaults to `hebi_arm_with_gripper_controller` when `use_gripper=true`, otherwise `hebi_arm_controller` | Name of the robot controller to use. Choices: `hebi_arm_controller` or `hebi_arm_with_gripper_controller` |
+| `use_gripper` | `false` | Whether to include a gripper controller in the setup. When `true` and `robot_controller=hebi_arm_controller`, an additional `gripper_controller` will be spawned. When `true` and `robot_controller=hebi_arm_with_gripper_controller` (default), only the combined controller is loaded |
 | `use_rviz` | `true` | Launch RViz for visualization |
 
 Here's an example to launch A-2580-06 arm with mock hardware:
@@ -498,15 +511,33 @@ sudo apt install ros-$ROS_DISTRO-gazebo-ros ros-$ROS_DISTRO-gazebo-ros2-control
 After launching your arm in hardware or simulation, you can test the controllers:
 
 ```bash
-ros2 launch hebi_bringup test_joint_trajectory_controller.launch.py config_file:=<test_config_file_path>
+ros2 launch hebi_bringup test_joint_trajectory_controller.launch.py controller_type:=<controller_type>
 ```
 
-This launch file executes a trajectory controller test node, and uses the specified test configuration to define joint trajectories.
+This launch file executes a trajectory controller test node and uses the specified test configuration to define joint trajectories.
+
+**Launch Arguments:**
+- `controller_type` (default: `hebi_arm_controller`): Specifies which controller configuration to test. Choices:
+  - `hebi_arm_controller`: Uses `test_hebi_arm_controller.yaml` (6-DoF arm only)
+  - `hebi_arm_with_gripper_controller`: Uses `test_hebi_arm_with_gripper_controller.yaml` (6-DoF arm + gripper)
+- `config_file` (optional): Directly specify a custom config file path to override the automatic selection
+
+**Examples:**
+```bash
+# Test arm controller (default)
+ros2 launch hebi_bringup test_joint_trajectory_controller.launch.py
+
+# Test arm with gripper controller
+ros2 launch hebi_bringup test_joint_trajectory_controller.launch.py controller_type:=hebi_arm_with_gripper_controller
+
+# Use custom config file
+ros2 launch hebi_bringup test_joint_trajectory_controller.launch.py config_file:=my_custom_test.yaml
+```
 
 **Important Configuration:**
-- The `config_file` parameter must reference a file in the `hebi_bringup/config` directory
-- Default configuration (`test_goal_publishers_config.yaml`) is set for a 6-DoF arm
-- For different arm configurations, edit the file to match your specific joint setup
+- Config files must be located in the `hebi_bringup/config` directory
+- Default configurations are set for 6-DoF arms
+- For different arm configurations, create a custom config file matching your joint setup
 
 When executed correctly, your robot arm will move through the joint positions defined in the config file.
 
@@ -527,7 +558,11 @@ Ensure you have Gazebo (`ros_gz`) and Gazebo ROS 2 Control (`ign_ros2_control` /
 To test the controller in Gazebo, use the same approach as with Gazebo Classic:
 
 ```bash
-ros2 launch hebi_bringup test_joint_trajectory_controller.launch.py config_file:=<test_config_file_path>
+# Test arm controller
+ros2 launch hebi_bringup test_joint_trajectory_controller.launch.py
+
+# Test arm with gripper controller
+ros2 launch hebi_bringup test_joint_trajectory_controller.launch.py controller_type:=hebi_arm_with_gripper_controller
 ```
 
 ## MoveIt
