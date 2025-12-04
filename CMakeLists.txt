@@ -36,93 +36,111 @@ include_directories(
 )
 
 add_executable(arm_node src/kits/arms/arm_node.cpp)
-ament_target_dependencies(arm_node
-  rclcpp
-  rclcpp_action
-  ament_index_cpp
-  geometry_msgs
-  trajectory_msgs
-  sensor_msgs
-  std_srvs
-  hebi_cpp_api
-  hebi_msgs
-  control_msgs
+target_link_libraries(arm_node
+  PUBLIC
+  rclcpp::rclcpp
+  rclcpp_action::rclcpp_action
+  ament_index_cpp::ament_index_cpp
+  ${geometry_msgs_TARGETS}
+  ${trajectory_msgs_TARGETS}
+  ${sensor_msgs_TARGETS}
+  sensor_msgs::sensor_msgs_library
+  ${std_srvs_TARGETS}
+  ${hebi_cpp_api_LIBRARIES}
+  ${hebi_msgs_TARGETS}
+  ${control_msgs_TARGETS}
 )
+target_include_directories(arm_node PUBLIC ${hebi_cpp_api_INCLUDE_DIRS})
 
 add_executable(ex_arm_joint_motion src/kits/arms/ex_arm_joint_motion.cpp)
-ament_target_dependencies(ex_arm_joint_motion
-  rclcpp
-  rclcpp_action
-  trajectory_msgs
-  hebi_msgs
-  geometry_msgs
+target_link_libraries(ex_arm_joint_motion
+  PUBLIC
+  rclcpp::rclcpp
+  rclcpp_action::rclcpp_action
+  ${trajectory_msgs_TARGETS}
+  ${hebi_msgs_TARGETS}
+  ${geometry_msgs_TARGETS}
 )
 
 add_executable(ex_arm_cartesian_motion src/kits/arms/ex_arm_cartesian_motion.cpp)
-ament_target_dependencies(ex_arm_cartesian_motion
-  rclcpp
-  rclcpp_action
-  hebi_msgs
-  geometry_msgs
+target_link_libraries(ex_arm_cartesian_motion
+  PUBLIC
+  rclcpp::rclcpp
+  rclcpp_action::rclcpp_action
+  ${hebi_msgs_TARGETS}
+  ${geometry_msgs_TARGETS}
 )
 
 add_executable(joystick_node src/kits/arms/joystick_node.cpp)
-ament_target_dependencies(joystick_node
-  rclcpp
-  rclcpp_action
-  trajectory_msgs
-  hebi_msgs
-  geometry_msgs
-  hebi_cpp_api
-  hebi_msgs
-  control_msgs
-  std_srvs
+target_link_libraries(joystick_node
+  PUBLIC
+  rclcpp::rclcpp
+  rclcpp_action::rclcpp_action
+  ${trajectory_msgs_TARGETS}
+  ${hebi_msgs_TARGETS}
+  ${geometry_msgs_TARGETS}
+  ${hebi_cpp_api_LIBRARIES}
+  ${control_msgs_TARGETS}
+  ${std_srvs_TARGETS}
 )
+target_include_directories(joystick_node PUBLIC ${hebi_cpp_api_INCLUDE_DIRS})
 
 add_executable(omni_base_node src/kits/bases/omni_base_node.cpp src/kits/bases/util/omni_base.cpp src/kits/bases/util/odom_publisher.cpp)
-ament_target_dependencies(omni_base_node
-  rclcpp
-  rclcpp_action
-  ament_index_cpp
-  geometry_msgs
-  nav_msgs
-  trajectory_msgs
-  sensor_msgs
-  std_srvs
-  hebi_cpp_api
-  hebi_msgs
-  tf2_ros
+target_link_libraries(omni_base_node
+  PUBLIC
+  rclcpp::rclcpp
+  rclcpp_action::rclcpp_action
+  ament_index_cpp::ament_index_cpp
+  ${geometry_msgs_TARGETS}
+  ${nav_msgs_TARGETS}
+  ${trajectory_msgs_TARGETS}
+  ${sensor_msgs_TARGETS}
+  sensor_msgs::sensor_msgs_library
+  ${std_srvs_TARGETS}
+  ${hebi_cpp_api_LIBRARIES}
+  ${hebi_msgs_TARGETS}
+  tf2_ros::tf2_ros
+  tf2_ros::static_transform_broadcaster_node
 )
+target_include_directories(omni_base_node PUBLIC ${hebi_cpp_api_INCLUDE_DIRS})
 
 add_executable(mecanum_base_node src/kits/bases/mecanum_base_node.cpp src/kits/bases/util/mecanum_base.cpp src/kits/bases/util/odom_publisher.cpp)
-ament_target_dependencies(mecanum_base_node
-  rclcpp
-  rclcpp_action
-  ament_index_cpp
-  geometry_msgs
-  nav_msgs
-  trajectory_msgs
-  sensor_msgs
-  std_srvs
-  hebi_cpp_api
-  hebi_msgs
-  tf2_ros
+target_link_libraries(mecanum_base_node
+  PUBLIC
+  rclcpp::rclcpp
+  rclcpp_action::rclcpp_action
+  ament_index_cpp::ament_index_cpp
+  ${geometry_msgs_TARGETS}
+  ${nav_msgs_TARGETS}
+  ${trajectory_msgs_TARGETS}
+  ${sensor_msgs_TARGETS}
+  sensor_msgs::sensor_msgs_library
+  ${std_srvs_TARGETS}
+  ${hebi_cpp_api_LIBRARIES}
+  ${hebi_msgs_TARGETS}
+  tf2_ros::tf2_ros
+  tf2_ros::static_transform_broadcaster_node
 )
+target_include_directories(mecanum_base_node PUBLIC ${hebi_cpp_api_INCLUDE_DIRS})
 
 add_executable(diff_drive_node src/kits/bases/diff_drive_node.cpp src/kits/bases/util/diff_drive.cpp src/kits/bases/util/odom_publisher.cpp)
-ament_target_dependencies(diff_drive_node
-  rclcpp
-  rclcpp_action
-  ament_index_cpp
-  geometry_msgs
-  nav_msgs
-  trajectory_msgs
-  sensor_msgs
-  std_srvs
-  hebi_cpp_api
-  hebi_msgs
-  tf2_ros
+target_link_libraries(diff_drive_node
+  PUBLIC
+  rclcpp::rclcpp
+  rclcpp_action::rclcpp_action
+  ament_index_cpp::ament_index_cpp
+  ${geometry_msgs_TARGETS}
+  ${nav_msgs_TARGETS}
+  ${trajectory_msgs_TARGETS}
+  ${sensor_msgs_TARGETS}
+  sensor_msgs::sensor_msgs_library
+  ${std_srvs_TARGETS}
+  ${hebi_cpp_api_LIBRARIES}
+  ${hebi_msgs_TARGETS}
+  tf2_ros::tf2_ros
+  tf2_ros::static_transform_broadcaster_node
 )
+target_include_directories(diff_drive_node PUBLIC ${hebi_cpp_api_INCLUDE_DIRS})
 
 # add_executable(hexapod_control src/kits/daisy/hexapod_control.cpp
 #   src/kits/daisy/util/leg.cpp
@@ -141,15 +159,17 @@ ament_target_dependencies(diff_drive_node
 # )
 
 add_executable(treaded_base_node src/kits/tready/treaded_base_node.cpp src/kits/tready/treaded_base.cpp)
-ament_target_dependencies(treaded_base_node
-  rclcpp
-  ament_index_cpp
-  geometry_msgs
-  std_msgs
-  hebi_cpp_api
-  hebi_msgs
-  std_srvs
+target_link_libraries(treaded_base_node
+  PUBLIC
+  rclcpp::rclcpp
+  ament_index_cpp::ament_index_cpp
+  ${geometry_msgs_TARGETS}
+  ${std_msgs_TARGETS}
+  ${hebi_cpp_api_LIBRARIES}
+  ${hebi_msgs_TARGETS}
+  ${std_srvs_TARGETS}
 )
+target_include_directories(treaded_base_node PUBLIC ${hebi_cpp_api_INCLUDE_DIRS})
 
 
 install(TARGETS
