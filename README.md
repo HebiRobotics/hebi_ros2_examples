@@ -246,8 +246,8 @@ To control HEBI arms using `ros2_control`, you need additional packages that are
 
 ```bash
 # Clone required repositories
-git clone https://github.com/HebiRobotics/hebi_hardware.git
-git clone -b $ROS_DISTRO https://github.com/HebiRobotics/hebi_bringup.git # ROS_DISTRO can be humble, iron, or jazzy
+git clone -b $ROS_DISTRO https://github.com/HebiRobotics/hebi_hardware.git # Branch: humble, iron, jazzy, or kilted
+git clone -b $ROS_DISTRO https://github.com/HebiRobotics/hebi_bringup.git # Branch: humble, iron, jazzy, or kilted
 
 # Install ROS2 Control dependencies
 sudo apt install ros-$ROS_DISTRO-ros2-control ros-$ROS_DISTRO-ros2-controllers -y
