@@ -500,8 +500,8 @@ ros2 launch hebi_bringup bringup_arm.launch.py hebi_arm:=<your_robot_name>
 | `controllers_file` | `config/<hebi_arm>_controllers.yaml` | Path to controller parameter file relative to `controllers_package` |
 | `use_mock_hardware` | `true` | Use mock hardware interface instead of real hardware |
 | `mock_sensor_commands` | `false` | Enable mock sensor commands (only applicable when `use_mock_hardware` is true) |
-| `robot_controller` | Defaults to `hebi_arm_with_gripper_controller` when `use_gripper=true`, otherwise `hebi_arm_controller` | Name of the robot controller to use. Choices: `hebi_arm_controller` or `hebi_arm_with_gripper_controller` |
-| `use_gripper` | `false` | Whether to include a gripper controller in the setup. When `true` and `robot_controller=hebi_arm_controller`, an additional `gripper_controller` will be spawned. When `true` and `robot_controller=hebi_arm_with_gripper_controller` (default), only the combined controller is loaded |
+| `robot_controller` | `hebi_arm_controller` | Name of the robot controller to use |
+| `use_gripper` | `false` | Whether to include a gripper controller in the setup |
 | `use_rviz` | `true` | Launch RViz for visualization |
 
 Here's an example to launch A-2580-06 arm with mock hardware:
@@ -528,28 +528,10 @@ sudo apt install ros-$ROS_DISTRO-gazebo-ros ros-$ROS_DISTRO-gazebo-ros2-control
 After launching your arm in hardware or simulation, you can test the controllers:
 
 ```bash
-ros2 launch hebi_bringup test_joint_trajectory_controller.launch.py controller_type:=<controller_type>
+ros2 launch hebi_bringup test_joint_trajectory_controller.launch.py config_file:=<test_config_file_path>
 ```
 
 This launch file executes a trajectory controller test node and uses the specified test configuration to define joint trajectories.
-
-**Launch Arguments:**
-- `controller_type` (default: `hebi_arm_controller`): Specifies which controller configuration to test. Choices:
-  - `hebi_arm_controller`: Uses `test_hebi_arm_controller.yaml` (6-DoF arm only)
-  - `hebi_arm_with_gripper_controller`: Uses `test_hebi_arm_with_gripper_controller.yaml` (6-DoF arm + gripper)
-- `config_file` (optional): Directly specify a custom config file path to override the automatic selection
-
-**Examples:**
-```bash
-# Test arm controller (default)
-ros2 launch hebi_bringup test_joint_trajectory_controller.launch.py
-
-# Test arm with gripper controller
-ros2 launch hebi_bringup test_joint_trajectory_controller.launch.py controller_type:=hebi_arm_with_gripper_controller
-
-# Use custom config file
-ros2 launch hebi_bringup test_joint_trajectory_controller.launch.py config_file:=my_custom_test.yaml
-```
 
 **Important Configuration:**
 - Config files must be located in the `hebi_bringup/config` directory
@@ -575,11 +557,7 @@ Ensure you have Gazebo (`ros_gz`) and Gazebo ROS 2 Control (`ign_ros2_control` /
 To test the controller in Gazebo, use the same approach as with Gazebo Classic:
 
 ```bash
-# Test arm controller
-ros2 launch hebi_bringup test_joint_trajectory_controller.launch.py
-
-# Test arm with gripper controller
-ros2 launch hebi_bringup test_joint_trajectory_controller.launch.py controller_type:=hebi_arm_with_gripper_controller
+ros2 launch hebi_bringup test_joint_trajectory_controller.launch.py config_file:=<test_config_file_path>
 ```
 
 ## MoveIt
