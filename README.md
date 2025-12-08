@@ -1,11 +1,25 @@
 # HEBI ROS 2 Examples
 
-HEBI arms can be controlled with ROS 2 in three ways:
-- Standalone HEBI API
-- ROS 2 Control
-- MoveIt
+This repository contains examples and nodes for controlling HEBI robotic systems with ROS 2.
 
-Each option offers unique advantages depending on your use case and the desired level of integration with the ROS 2 ecosystem. The standalone HEBI API provides direct control via the HEBI C++ API, ROS 2 Control offers standardized interfaces, and MoveIt provides advanced motion planning capabilities.
+## Supported Platforms
+
+### Robotic Arms
+HEBI arms can be controlled with ROS 2 in three ways:
+- **Standalone HEBI API**: Direct control via the HEBI C++ API
+- **ROS 2 Control**: Standardized controller interfaces
+- **MoveIt**: Advanced motion planning capabilities such as collision avoidance and path planning
+
+Each option offers unique advantages depending on your use case and the desired level of integration with the ROS 2 ecosystem.
+
+### Mobile Bases
+HEBI also provides control nodes for various mobile base platforms including:
+- Omni Base (omnidirectional wheels)
+- Mecanum Base (mecanum wheels)
+- Differential Drive Base
+- Tready Treaded Base (wheeled-flipper platform)
+
+See the [Mobile Bases](#mobile-bases-1) section for detailed documentation on each platform.
 
 For assistance or inquiries about implementing these approaches, contact HEBI Robotics support at support@hebirobotics.com.
 
@@ -46,19 +60,22 @@ rosdep update --include-eol-distros
 rosdep install --from-paths src --ignore-src -r -y --include-eol-distros
 ```
 
+Install Python dependencies:
+```bash
+python3 -m pip install -r src/hebi_ros2_examples/requirements.txt
+```
+
+**Note about Python packages**:
+- `hebi-py`: **Required** for Tready base node (`tready_node.py`)
+- `lxml`: Only needed for auto-generating URDFs from HRDF files at launch
+- `numpy` and `scipy`: Used by various Python examples and utilities
+
 Finally, build the workspace and source it:
 ```bash
 cd ~/hebi_ws
 colcon build --symlink-install
 source install/setup.bash
 ```
-
-(Optional) Install `pip` dependencies for the HRDF→URDF conversion script (only needed if you plan to auto-generate a URDF at launch):
-```bash
-python3 -m pip install -r src/hebi_ros2_examples/requirements.txt
-```
-
-You can skip this step if you do not use the conversion script. For details, see the [URDF Generation](#urdf-generation) section.
 
 ## Robot Description
 
@@ -632,6 +649,165 @@ ros2 launch hebi_bringup move_group.launch.py \
 Set `use_sim_time:=true` when using simulation, and `use_sim_time:=false` with real hardware.
 
 **Note:** We set `use_rviz:=false` in the first step to avoid duplicate RViz windows. The MoveIt launch file will open RViz with the MoveIt configuration loaded.
+
+## Mobile Bases
+
+HEBI provides several mobile base platforms with different wheel configurations. Each base platform has its own control node and launch file.
+
+### Omni Base
+
+The omni base uses omnidirectional wheels for holonomic motion (can move in any direction without rotation).
+
+**File**: [omni_base_node.cpp](src/kits/bases/omni_base_node.cpp)
+
+#### Launch Command
+
+```bash
+ros2 launch hebi_ros2_examples omni_base_node.launch.py
+```
+
+**Launch Arguments**:
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `params_file` | `omni_base_params.yaml` | Path to YAML file containing node parameters |
+
+#### Topics & Services
+
+**Subscribers**:
+- `/cmd_vel` (geometry_msgs/Twist) - Velocity commands for base motion
+
+**Publishers**:
+- `/omni_base/joint_states` (sensor_msgs/JointState) - Joint feedback
+- `/odom` (nav_msgs/Odometry) - Odometry information (if enabled)
+- `/tf` - TF transforms for odometry (if enabled)
+
+**Action Servers**:
+- `/base_motion` (hebi_msgs/BaseMotion) - Trajectory-based motion commands
+
+**Parameters**:
+- `names` - List of module names
+- `families` - List of module families
+- `publish_odom` - Enable odometry publishing (default: false)
+
+**URDF and Visualization**: Launch file includes RViz visualization with omni base URDF.
+
+---
+
+### Mecanum Base
+
+The mecanum base uses mecanum wheels for holonomic motion with different kinematics than omnidirectional wheels.
+
+**File**: [mecanum_base_node.cpp](src/kits/bases/mecanum_base_node.cpp)
+
+#### Launch Command
+
+```bash
+ros2 launch hebi_ros2_examples mecanum_base_node.launch.py
+```
+
+**Launch Arguments**:
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `params_file` | `mecanum_base_params.yaml` | Path to YAML file containing node parameters |
+
+#### Topics & Services
+
+**Subscribers**:
+- `/cmd_vel` (geometry_msgs/Twist) - Velocity commands for base motion
+
+**Publishers**:
+- `/mecanum_base/joint_states` (sensor_msgs/JointState) - Joint feedback
+- `/odom` (nav_msgs/Odometry) - Odometry information (if enabled)
+- `/tf` - TF transforms for odometry (if enabled)
+
+**Action Servers**:
+- `/base_motion` (hebi_msgs/BaseMotion) - Trajectory-based motion commands
+
+**Parameters**:
+- `names` - List of module names
+- `families` - List of module families
+- `publish_odom` - Enable odometry publishing (default: false)
+
+**URDF and Visualization**: Launch file includes RViz visualization with mecanum base URDF.
+
+---
+
+### Differential Drive Base
+
+The differential drive base uses two independently driven wheels for non-holonomic motion.
+
+**File**: [diff_drive_node.cpp](src/kits/bases/diff_drive_node.cpp)
+
+#### Topics & Services
+
+**Subscribers**:
+- `/cmd_vel` (geometry_msgs/Twist) - Velocity commands for base motion
+
+**Publishers**:
+- `/diff_drive/joint_states` (sensor_msgs/JointState) - Joint feedback
+- `/odom` (nav_msgs/Odometry) - Odometry information (if enabled)
+- `/tf` - TF transforms for odometry (if enabled)
+
+**Action Servers**:
+- `/base_motion` (hebi_msgs/BaseMotion) - Trajectory-based motion commands
+
+**Parameters**:
+- `names` - List of module names
+- `families` - List of module families
+- `publish_odom` - Enable odometry publishing (default: false)
+
+**Note**: A launch file for the differential drive base is not currently provided, but the node can be launched directly or with a custom launch file.
+
+---
+
+### Tready Treaded Base
+
+The Tready platform is a wheeled-flipper robot with tracks and articulated flippers for complex terrain navigation.
+
+**File**: [tready_node.py](src/kits/tready/tready_node.py)
+
+**Prerequisites**: Requires `hebi-py` Python package. If you followed the workspace setup instructions, this is already installed. Otherwise:
+```bash
+python3 -m pip install hebi-py
+```
+
+#### Launch Command
+
+```bash
+ros2 launch hebi_ros2_examples tready.launch.py
+```
+
+**Launch Arguments**:
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `params_file` | `tready_base_params.yaml` | Path to YAML file containing node parameters |
+
+#### Topics & Services
+
+**Subscribers**:
+- `/cmd_vel` (geometry_msgs/Twist) - Base linear and angular velocity
+- `/flipper_vel` (hebi_msgs/TreadyFlipperVelocityCommand) - Individual flipper velocities
+- `/torque_cmd` (hebi_msgs/TreadyTorqueModeCommand) - Torque mode parameters
+- `/color` (std_msgs/ColorRGBA) - LED color control
+
+**Publishers**:
+- `/state` (hebi_msgs/TreadedBaseState) - Current robot state
+
+**Services**:
+- `/home_flippers` (std_srvs/Trigger) - Home all flippers
+- `/align_flippers` (std_srvs/Trigger) - Align flippers to same angle
+- `/stable_mode` (std_srvs/SetBool) - Toggle torque/velocity mode
+
+**Parameters**:
+- `gains_package` - Package containing gains XML file
+- `gains_file` - Path to gains file relative to gains_package
+- `hrdf_package` - Package containing HRDF file
+- `hrdf_file` - Path to HRDF file relative to hrdf_package
+
+**Important Note**: A C++ implementation exists at [treaded_base_node.cpp](src/kits/tready/treaded_base_node.cpp) but is **deprecated**. The Python version is the preferred implementation with better features and ROS 2 integration.
 
 ## Additional Resources
 
