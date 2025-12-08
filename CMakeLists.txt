@@ -202,6 +202,7 @@ install(PROGRAMS
   scripts/mobile_io/rosie_io.py
   scripts/mobile_io/hexapod_io.py
   scripts/utils/joint_state_combiner.py
+  src/kits/tready/tready_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

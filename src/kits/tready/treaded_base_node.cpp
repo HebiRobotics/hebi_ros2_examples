@@ -3,13 +3,18 @@
  *
  * @author Matthew Tesch < matt @ hebirobotics.com >
  * @since 19 Nov 2021
+ *
+ * @deprecated This C++ implementation is deprecated.
+ * Please use the Python implementation at src/kits/tready/tready_node.py instead.
+ * The Python version provides the same functionality with additional features
+ * and better integration with the ROS 2 ecosystem.
  */
 
 #include "rclcpp/rclcpp.hpp"
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <std_msgs/msg/color_rgba.hpp>
-#include <hebi_msgs/msg/flipper_velocity_command.hpp>
+#include <hebi_msgs/msg/tready_flipper_velocity_command.hpp>
 #include <hebi_msgs/msg/treaded_base_state.hpp>
 #include <std_srvs/srv/set_bool.hpp>
 
@@ -33,7 +38,7 @@ public:
     }
 
     base_vel_subscriber_ = this->create_subscription<geometry_msgs::msg::Twist>("cmd_vel", 10, std::bind(&TreadedBaseNode::baseVelCallback, this, std::placeholders::_1));
-    flipper_vel_subscriber_ = this->create_subscription<hebi_msgs::msg::FlipperVelocityCommand>("flipper_vel", 10, std::bind(&TreadedBaseNode::flipperVelCallback, this, std::placeholders::_1));
+    flipper_vel_subscriber_ = this->create_subscription<hebi_msgs::msg::TreadyFlipperVelocityCommand>("flipper_vel", 10, std::bind(&TreadedBaseNode::flipperVelCallback, this, std::placeholders::_1));
     color_subscriber_ = this->create_subscription<std_msgs::msg::ColorRGBA>("color", 10, std::bind(&TreadedBaseNode::colorCallback, this, std::placeholders::_1));
 
     state_publisher_ = this->create_publisher<hebi_msgs::msg::TreadedBaseState>("state", 100);
@@ -48,7 +53,7 @@ private:
 
   // Subscribers
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr base_vel_subscriber_;
-  rclcpp::Subscription<hebi_msgs::msg::FlipperVelocityCommand>::SharedPtr flipper_vel_subscriber_;
+  rclcpp::Subscription<hebi_msgs::msg::TreadyFlipperVelocityCommand>::SharedPtr flipper_vel_subscriber_;
   rclcpp::Subscription<std_msgs::msg::ColorRGBA>::SharedPtr color_subscriber_;
 
   // Publishers
@@ -106,7 +111,7 @@ private:
     base_->setChassisVelTrajectory(t, base_->chassisRampTime(), vels);
   }
 
-  void flipperVelCallback(const hebi_msgs::msg::FlipperVelocityCommand::SharedPtr msg) {
+  void flipperVelCallback(const hebi_msgs::msg::TreadyFlipperVelocityCommand::SharedPtr msg) {
     // Ignore input while aligning or homing flippers!
     if (base_->isAligning() || global_homing_)
       return;
@@ -126,8 +131,6 @@ private:
   }
 
   void publishState() {
-    state_msg_.flippers_locked = base_->alignedFlipperMode();
-    state_msg_.flippers_aligned = base_->flippersAligned();
     state_msg_.flipper_trajectory_active = base_->hasActiveFlipperTrajectory();
     state_msg_.base_trajectory_active = base_->hasActiveBaseTrajectory();
     state_msg_.mstop_pressed = base_->isMStopActive();

@@ -1,3 +1,11 @@
+tready_node:
+  ros__parameters:
+    gains_package: "hebi_description"
+    gains_file: "config/tready/gains/smart_tready_gains.xml"
+    hrdf_package: "hebi_description"
+    hrdf_file: "config/tready/hrdf/Tready.hrdf"
+
 treaded_base_node:
-  gains_package: "hebi_description"
-  gains_file: "config/tready/gains/r_tready_gains.xml"
+  ros__parameters:
+    gains_package: "hebi_description"
+    gains_file: "config/tready/gains/r_tready_gains.xml"

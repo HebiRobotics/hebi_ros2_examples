@@ -4,7 +4,7 @@ import rclpy
 from rclpy.node import Node
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Twist
-from hebi_msgs.msg import TreadedBaseState, FlipperVelocityCommand
+from hebi_msgs.msg import TreadedBaseState, TreadyFlipperVelocityCommand
 from std_srvs.srv import SetBool
 from time import sleep
 import hebi
@@ -31,7 +31,7 @@ class TreadyIONode(Node):
     def __init__(self):
         super().__init__('tready_io_node')
 
-        self.declare_parameter("family", "HEBI")
+        self.declare_parameter("family", "Chevron")
         self.declare_parameter("name", "mobileIO")
 
         self.SPEED_MAX_LIN = 0.15  # m/s
@@ -41,7 +41,7 @@ class TreadyIONode(Node):
         self.timer_mio = self.create_timer(0.02, self.parse_mobile_io_feedback)
         
         self.cmd_vel_pub = self.create_publisher(Twist, 'cmd_vel', 10)
-        self.flipper_vel_pub = self.create_publisher(FlipperVelocityCommand, 'flipper_vel', 10)
+        self.flipper_vel_pub = self.create_publisher(TreadyFlipperVelocityCommand, 'flipper_vel', 10)
         
         self.treaded_base_state_sub = self.create_subscription(
             TreadedBaseState,
@@ -53,7 +53,6 @@ class TreadyIONode(Node):
         # Service client 
         self.home_flippers_service = self.create_client(SetBool, 'home_flippers')
         self.align_flippers_service = self.create_client(SetBool, 'align_flippers')
-
 
         self.should_reset = False
         self.align_flippers = False
@@ -75,38 +74,14 @@ class TreadyIONode(Node):
 
         self.should_reset = bool(self.mio.get_button_state(button_config['reset_pose_btn']))
 
-        # Flipper Control
-        self.align_flippers = bool(self.mio.get_button_state(button_config['joined_flipper_btn']))
-
-        if self.align_flippers != self.state_msg.flippers_locked:
-            req = SetBool.Request()
-            req.data = self.align_flippers
-            res = self.align_flippers_service.call_async(req)
-            rclpy.spin_until_future_complete(self, res)
-            
-            if res.result().success:
-                self.get_logger().info("Flippers aligned")
-            else:
-                self.get_logger().error("Flippers failed to align")
-            
-            return
-
         flip1 = self.mio.get_axis_state(button_config['slider_flip1'])
         flip2 = self.mio.get_axis_state(button_config['slider_flip2'])
         flip3 = self.mio.get_axis_state(button_config['slider_flip3'])
         flip4 = self.mio.get_axis_state(button_config['slider_flip4'])
-        
-        if self.align_flippers:
-            f_vel1 = max(abs(flip1), abs(flip2)) * np.sign(flip1 + flip2) * self.FLIPPER_VEL_SCALE
-            f_vel2 = -f_vel1
-            f_vel3 = max(abs(flip3), abs(flip4)) * np.sign(flip3 + flip4) * self.FLIPPER_VEL_SCALE
-            f_vel4 = -f_vel3
-
-        else:
-            f_vel1 = flip1 * self.FLIPPER_VEL_SCALE
-            f_vel2 = -1 * flip2 * self.FLIPPER_VEL_SCALE
-            f_vel3 = flip3 * self.FLIPPER_VEL_SCALE
-            f_vel4 = -1 * flip4 * self.FLIPPER_VEL_SCALE
+        f_vel1 = flip1 * self.FLIPPER_VEL_SCALE
+        f_vel2 = -1 * flip2 * self.FLIPPER_VEL_SCALE
+        f_vel3 = flip3 * self.FLIPPER_VEL_SCALE
+        f_vel4 = -1 * flip4 * self.FLIPPER_VEL_SCALE
         
         self.flipper_vels = [f_vel1, f_vel2, f_vel3, f_vel4]
 
@@ -127,7 +102,7 @@ class TreadyIONode(Node):
         self.cmd_vel_pub.publish(msg)
     
     def flipper_vel_callback(self):
-        msg = FlipperVelocityCommand()
+        msg = TreadyFlipperVelocityCommand()
         msg.front_left = self.flipper_vels[0]
         msg.front_right = self.flipper_vels[1]
         msg.back_left = self.flipper_vels[2]
@@ -153,6 +128,7 @@ class TreadyIONode(Node):
             return False
         
         self.get_logger().info("Connected to Mobile IO!")
+        self.mio.resetUI()
 
         # set mobileIO control config
         self.mio.set_led_color("blue")
