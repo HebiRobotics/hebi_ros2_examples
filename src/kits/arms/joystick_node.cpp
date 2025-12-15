@@ -54,7 +54,14 @@ public:
     // Initialize last button press time
     last_button_press_time_ = this->now();
 
-    RCLCPP_INFO(this->get_logger(), "Started X-Box arm controller");
+    RCLCPP_INFO(this->get_logger(), "Started Joystick Arm Controller");
+    RCLCPP_INFO(this->get_logger(), "Controller mapping:");
+    RCLCPP_INFO(this->get_logger(), "  Left Stick: X/Y translation");
+    RCLCPP_INFO(this->get_logger(), "  Right Stick: Pitch/Yaw rotation");
+    RCLCPP_INFO(this->get_logger(), "  R1/RB: Z up");
+    RCLCPP_INFO(this->get_logger(), "  R2/RT: Z down");
+    RCLCPP_INFO(this->get_logger(), "  D-pad L/R: Roll");
+    RCLCPP_INFO(this->get_logger(), "  Start: Go to home position");
   }
 
 private:
@@ -96,6 +103,9 @@ private:
   // Initialize tuned admittance value for low pass filtering
   double low_pass_admittance_ = 0.05;
 
+  // Deadband threshold to prevent joystick drift
+  double deadband_threshold_ = 0.1;
+
   void get_num_joints(const sensor_msgs::msg::JointState::SharedPtr msg)
   {
     if (!num_joints_initialized_)
@@ -115,56 +125,63 @@ private:
     controller_state_ = *msg;
   }
 
+  // Apply deadband to joystick axes to prevent drift
+  double apply_deadband(double value)
+  {
+    return (std::abs(value) < deadband_threshold_) ? 0.0 : value;
+  }
+
   void process_controller()
   {
-    // Fowards (+X) and backwards (-X) motion through Left Joystick
-    x_vel_ += low_pass_admittance_ * (x_vel_gain_ * controller_state_.axes.at(1) - x_vel_);
+    // === TRANSLATION CONTROL (Left Stick) ===
+    // Forward (+X) and backward (-X) motion through Left Joystick Y-axis
+    double x_input = apply_deadband(controller_state_.axes.at(1));
+    x_vel_ += low_pass_admittance_ * (x_vel_gain_ * x_input - x_vel_);
 
-    // Left (+Y) and right (-Y) motion through Left Joystick
-    y_vel_ += low_pass_admittance_ * (y_vel_gain_ * controller_state_.axes.at(0) - y_vel_);
+    // Left (+Y) and right (-Y) motion through Left Joystick X-axis
+    double y_input = apply_deadband(controller_state_.axes.at(0));
+    y_vel_ += low_pass_admittance_ * (y_vel_gain_ * y_input - y_vel_);
 
-    // Up (+Z) and down (-Z) motion through L1 and L2
-    // Remain stationary if neither pressed
-    if (controller_state_.buttons.at(4) == 0 &&
-        static_cast<int>(controller_state_.axes.at(2)) == 1)
-    {
-      z_vel_ += low_pass_admittance_ * (0 - z_vel_);
-    }
-    // Move up if L1 pressed
-    else if (controller_state_.buttons.at(4) == 1)
-    {
-      z_vel_ += low_pass_admittance_ * (z_vel_gain_ - z_vel_);
-    }
-    // Move down if L2 pressed
-    else if (static_cast<int>(controller_state_.axes.at(2)) == -1)
-    {
-      z_vel_ += low_pass_admittance_ * (-z_vel_gain_ - z_vel_);
-    }
+    // === Z-AXIS CONTROL (Right Shoulder/Trigger) ===
+    // Up (+Z) with R1/RB button (index 5), Down (-Z) with R2/RT trigger (axis 5)
+    double z_target = 0.0;
 
-    // Roll clockwise (+X) and counterclockwise (-X) through arrow keys
-    // Return to zero if neither pressed
-    if (static_cast<int>(controller_state_.axes.at(6)) == 0)
+    // R1/RB button for up
+    if (controller_state_.buttons.at(5) == 1)
     {
-      roll_vel_ = 0; // TOFIX
+      z_target = z_vel_gain_;
     }
-    // Roll clockwise if right key pressed
-    else if (static_cast<int>(controller_state_.axes.at(6)) == -1)
+    // R2/RT trigger for down (axis 5: 1.0 = not pressed, -1.0 = fully pressed)
+    else if (controller_state_.axes.at(5) < 0.5)
     {
-      roll_vel_ = roll_vel_gain_;
-    }
-    // Roll counterclockwise if left key pressed
-    else if (static_cast<int>(controller_state_.axes.at(6)) == 1)
-    {
-      roll_vel_ = -roll_vel_gain_;
+      // Map trigger from [1.0, -1.0] to [0.0, -z_vel_gain_]
+      z_target = -z_vel_gain_ * (1.0 - controller_state_.axes.at(5)) / 2.0;
     }
 
-    // Pitch up (+Y) and down (-Y) through Right Joystick
-    // Invert controls
-    pitch_vel_ += low_pass_admittance_ * (-pitch_vel_gain_ * controller_state_.axes.at(4) - pitch_vel_);
+    z_vel_ += low_pass_admittance_ * (z_target - z_vel_);
 
-    // Yaw left (+Z) and right (-Z) through Right Joystick
-    // Invert controls
-    yaw_vel_ += low_pass_admittance_ * (-yaw_vel_gain_ * -controller_state_.axes.at(3) - yaw_vel_);
+    // === ROTATION CONTROL ===
+    // Roll clockwise (+) and counterclockwise (-) through D-pad left/right (axis 6)
+    double roll_target = 0.0;
+    int dpad_lr = static_cast<int>(controller_state_.axes.at(6));
+    if (dpad_lr == 1)  // D-pad left
+    {
+      roll_target = -roll_vel_gain_;
+    }
+    else if (dpad_lr == -1)  // D-pad right
+    {
+      roll_target = roll_vel_gain_;
+    }
+    roll_vel_ += low_pass_admittance_ * (roll_target - roll_vel_);
+
+    // Pitch up (+) and down (-) through Right Joystick Y-axis
+    // Inverted for natural control (push forward = pitch down)
+    double pitch_input = apply_deadband(controller_state_.axes.at(4));
+    pitch_vel_ += low_pass_admittance_ * (-pitch_vel_gain_ * pitch_input - pitch_vel_);
+
+    // Yaw left (+) and right (-) through Right Joystick X-axis
+    double yaw_input = apply_deadband(controller_state_.axes.at(3));
+    yaw_vel_ += low_pass_admittance_ * (yaw_vel_gain_ * yaw_input - yaw_vel_);
   }
 
   void cartesian_jog_pub()

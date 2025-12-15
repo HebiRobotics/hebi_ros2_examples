@@ -242,6 +242,28 @@ To help you get started, several example scripts are provided that demonstrate h
 6. `ex_teleop_mobileio.py`: Uses HEBI Mobile IO to send jog commands for real-time arm control.
 7. `ex_haptic_teleop_node.py`: Uses a 3D Systems Touch X haptic device to control the arm in real time with haptic feedback, sending jog commands while receiving force feedback from the `ee_wrench` topic.
 
+### Joystick Control
+
+Control HEBI arms using a game controller (Xbox/PlayStation). See [joystick_node.cpp](src/kits/arms/joystick_node.cpp).
+
+**Controller Mapping:**
+- Left Stick: X/Y translation
+- Right Stick: Pitch/Yaw rotation
+- R1/RB: Z up | R2/RT: Z down
+- D-pad L/R: Roll
+- Start: Home position
+
+**Launch:**
+```bash
+ros2 launch hebi_ros2_examples arm_joystick_teleop.launch.py hebi_arm:=<your_robot_name>
+```
+
+**Prerequisites:**
+Install the ROS 2 joy package and connect your game controller:
+```bash
+sudo apt install ros-$ROS_DISTRO-joy
+```
+
 ## ROS 2 Control
 
 **⚠️ Important Note for ROS 2 Jazzy Users**
