@@ -1026,7 +1026,7 @@ private:
     Eigen::VectorXd::Map(&state_msg_.effort[0], eff.size()) = eff;
 
     if (gripper_) {
-      state_msg_.position.back() = gripper_->getState() * 0.37 * M_PI;
+      state_msg_.position.back() = gripper_->getState() * 0.365 * M_PI;
       state_msg_.velocity.back() = std::numeric_limits<double>::quiet_NaN(); // Gripper velocity not available
       state_msg_.effort.back() = std::numeric_limits<double>::quiet_NaN(); // Gripper effort not available
     }

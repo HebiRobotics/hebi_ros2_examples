@@ -171,7 +171,7 @@ The HEBI C++ API is wrapped in ROS 2 within the `arm_node` (`src/kits/arms/arm_n
 - */cmd_gripper [std_msgs/msg/Float64]*: Commands the gripper position, where 0 represents fully open and 1 represents fully closed.
 
 **Publishers**
-- */joint_states [sensor_msgs/msg/JointState]*: Joint angles of the arm and, if present, the gripper state (ranging from 0 for fully open to 1 for fully closed).
+- */joint_states [sensor_msgs/msg/JointState]*: Joint angles of the arm and, if present, the gripper state in radians.
 - */ee_pose [geometry_msgs/msg/PoseStamped]*: The pose of the end effector in SE3 space.
 - */ee_wrench [geometry_msgs/msg/WrenchStamped]*: End effector wrench (force and torque) feedback in the base frame, computed from joint torque errors.
 - */ee_force [geometry_msgs/msg/Vector3Stamped]*: End effector force (X, Y, Z components only), calculated based on the end effector position error. No scaling is applied; the output directly represents the position errors.
