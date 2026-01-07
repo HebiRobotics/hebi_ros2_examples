@@ -161,19 +161,21 @@ Here are some key points to note:
 
 The HEBI C++ API is wrapped in ROS 2 within the `arm_node` (`src/kits/arms/arm_node.cpp`). This node, utilizing the HEBI Arm API, provides various topics, services, and actions for arm control:
 
+**Important:** Some features require 6 degrees of freedom (6-DOF). For arms with fewer than 6 DOF (e.g., 3-DOF, 4-DOF, 5-DOF), full wrench control and wrench feedback are automatically disabled. All other features remain fully functional.
+
 **Subscribers**
 - */SE3_jog [hebi_msgs/msg/SE3Jog]*: Commands end effector jog in SE3 space (both Cartesian translation and rotation). Linear components are applied in the base frame, while angular components are applied in the end effector frame.
 - */cartesian_jog [hebi_msgs/msg/SE3Jog]*: Commands end effector jog in Cartesian space (x, y, z). Any angular displacement values in the message are ignored.
 - */cartesian_trajectory [hebi_msgs/msg/SE3Trajectory]*: Commands a trajectory for the end effector in SE3 or Cartesian space, optionally including gripper states if applicable.
 - */joint_jog [control_msgs/msg/JointJog]*: Commands joint jog by specifying incremental changes in joint angles.
 - */joint_trajectory [trajectory_msgs/msg/JointTrajectory]*: Commands a trajectory in joint space. If a gripper is present, its state should be included as the last joint in the trajectory.
-- */cmd_ee_wrench [geometry_msgs/msg/Wrench]*: Commands the end effector to apply a specified wrench (force and torque) in the base frame.
+- */cmd_ee_wrench [geometry_msgs/msg/Wrench]*: Commands the end effector to apply a specified wrench (force and torque) in the base frame. **Note:** Only available for 6-DOF arms.
 - */cmd_gripper [std_msgs/msg/Float64]*: Commands the gripper position, where 0 represents fully open and 1 represents fully closed.
 
 **Publishers**
 - */joint_states [sensor_msgs/msg/JointState]*: Joint angles of the arm and, if present, the gripper state in radians.
 - */ee_pose [geometry_msgs/msg/PoseStamped]*: The pose of the end effector in SE3 space.
-- */ee_wrench [geometry_msgs/msg/WrenchStamped]*: End effector wrench (force and torque) feedback in the base frame, computed from joint torque errors.
+- */ee_wrench [geometry_msgs/msg/WrenchStamped]*: End effector wrench (force and torque) feedback in the base frame, computed from joint torque errors. **Note:** Only available for 6-DOF arms.
 - */ee_force [geometry_msgs/msg/Vector3Stamped]*: End effector force (X, Y, Z components only), calculated based on the end effector position error. No scaling is applied; the output directly represents the position errors.
 - */gripper_state [std_msgs/msg/Float64]*: Current state of the gripper, where 0 represents fully open and 1 represents fully closed.
 - */inertia [geometry_msgs/msg/Inertia]*: Inertia of the arm.
@@ -240,7 +242,7 @@ To help you get started, several example scripts are provided that demonstrate h
 4. `ex_publish_cartesian_trajectory.py`: A Python example that publishes a predefined rectangular trajectory in the Y-Z plane (same as `ex_arm_cartesian_motion.cpp`) using the `/cartesian_trajectory` topic.
 5. `ex_teach_repeat_mobileio.py`: Uses HEBI Mobile IO to record and play back trajectories or move the arm to saved waypoints.
 6. `ex_teleop_mobileio.py`: Uses HEBI Mobile IO to send jog commands for real-time arm control.
-7. `ex_haptic_teleop_node.py`: Uses a 3D Systems Touch X haptic device to control the arm in real time with haptic feedback, sending jog commands while receiving force feedback from the `ee_wrench` topic.
+7. `ex_haptic_teleop_node.py`: Uses a 3D Systems Touch X haptic device to control the arm in real time with haptic feedback, sending jog commands while receiving force feedback from the `ee_wrench` topic. **Note:** Wrench feedback is only available for 6-DOF arms.
 
 ### Joystick Control
 

@@ -101,7 +101,10 @@ public:
     SE3_jog_subscriber_ = this->create_subscription<hebi_msgs::msg::SE3Jog>("SE3_jog", 10, std::bind(&ArmNode::SE3JogCallback, this, std::placeholders::_1));
     joint_trajectory_subscriber_ = this->create_subscription<trajectory_msgs::msg::JointTrajectory>("joint_trajectory", 10, std::bind(&ArmNode::jointTrajectoryCallback, this, std::placeholders::_1));
     cartesian_trajectory_subscriber_ = this->create_subscription<hebi_msgs::msg::SE3Trajectory>("cartesian_trajectory", 10, std::bind(&ArmNode::cartesianTrajectoryCallback, this, std::placeholders::_1));
-    cmd_ee_wrench_subscriber_ = this->create_subscription<geometry_msgs::msg::Wrench>("cmd_ee_wrench", 10, std::bind(&ArmNode::wrenchCommandCallback, this, std::placeholders::_1));
+    // Only enable wrench control for 6-DOF arms (full SE3 control)
+    if (num_joints_ >= 6) {
+      cmd_ee_wrench_subscriber_ = this->create_subscription<geometry_msgs::msg::Wrench>("cmd_ee_wrench", 10, std::bind(&ArmNode::wrenchCommandCallback, this, std::placeholders::_1));
+    }
     if (use_gripper_) {
       gripper_command_subscriber_ = this->create_subscription<std_msgs::msg::Float64>("cmd_gripper", 10, std::bind(&ArmNode::gripperCommandCallback, this, std::placeholders::_1));
     }
@@ -110,7 +113,10 @@ public:
     arm_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("joint_states", 10);
     center_of_mass_publisher_ = this->create_publisher<geometry_msgs::msg::Inertia>("inertia", 10);
     end_effector_pose_publisher_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("ee_pose", 10);
-    ee_wrench_publisher_ = this->create_publisher<geometry_msgs::msg::WrenchStamped>("ee_wrench", 10);
+    // Only publish full wrench for 6-DOF arms
+    if (num_joints_ >= 6) {
+      ee_wrench_publisher_ = this->create_publisher<geometry_msgs::msg::WrenchStamped>("ee_wrench", 10);
+    }
     ee_force_publisher_ = this->create_publisher<geometry_msgs::msg::Vector3Stamped>("ee_force", 10);
     goal_progress_publisher_ = this->create_publisher<std_msgs::msg::Float64>("goal_progress", 10);
     if (use_gripper_) {
@@ -158,12 +164,15 @@ public:
       RCLCPP_WARN(this->get_logger(), "Error Getting Feedback -- Check Connection");
     else {
       // Calculate jacobian and joint efforts from desired end-effector wrench
-      Eigen::MatrixXd ee_jacobian;
-      arm_->robotModel().getJacobianEndEffector(arm_->lastFeedback().getPosition(), ee_jacobian);
-      Eigen::VectorXd cmd_joint_effort = ee_jacobian.transpose() * desired_ee_wrench_;
-      
-      // Modify pending command here
-      arm_->pendingCommand().setEffort(arm_->pendingCommand().getEffort() + cmd_joint_effort);
+      // Only apply wrench commands for 6-DOF arms (full SE3 control)
+      if (num_joints_ >= 6 && desired_ee_wrench_.norm() > 0) {
+        Eigen::MatrixXd ee_jacobian;
+        arm_->robotModel().getJacobianEndEffector(arm_->lastFeedback().getPosition(), ee_jacobian);
+        Eigen::VectorXd cmd_joint_effort = ee_jacobian.transpose() * desired_ee_wrench_;
+        
+        // Modify pending command here
+        arm_->pendingCommand().setEffort(arm_->pendingCommand().getEffort() + cmd_joint_effort);
+      }
       // Send command
       if (!arm_->send())
         RCLCPP_WARN(this->get_logger(), "Error Sending Commands -- Check Connection");
@@ -984,6 +993,11 @@ private:
     if (!checkArmConditions("cmd_ee_wrench"))
       return;
 
+    if (num_joints_ < 6) {
+      RCLCPP_WARN(this->get_logger(), "Wrench control requires at least 6-DOF. This arm has %d DOF. Ignoring command.", num_joints_);
+      return;
+    }
+
     desired_ee_wrench_(0) = (*wrench_msg).force.x;
     desired_ee_wrench_(1) = (*wrench_msg).force.y;
     desired_ee_wrench_(2) = (*wrench_msg).force.z;
@@ -1057,31 +1071,35 @@ private:
 
     end_effector_pose_publisher_->publish(ee_pose_msg_);
 
-    // Publish Raw End-Effector Wrench    
-    Eigen::MatrixXd ee_jacobian;
-    arm_->robotModel().getJacobianEndEffector(pos, ee_jacobian);
+    // Publish Raw End-Effector Wrench (only for 6-DOF arms)
+    if (num_joints_ >= 6 && ee_wrench_publisher_) {
+      Eigen::MatrixXd ee_jacobian;
+      arm_->robotModel().getJacobianEndEffector(pos, ee_jacobian);
 
-    // Print a warning if the Jacobian is singular
-    if (abs(ee_jacobian.transpose().determinant()) < 1e-6) {
-      RCLCPP_WARN(this->get_logger(), "Jacobian is singular, end-effector wrench may not be accurate");
+      // Print a warning if the Jacobian is near-singular (check smallest singular value)
+      // Note: Jacobian is 6xN where N is num_joints, so we check condition number or min singular value
+      Eigen::JacobiSVD<Eigen::MatrixXd> svd(ee_jacobian);
+      if (svd.singularValues()(svd.singularValues().size()-1) < 1e-6) {
+        RCLCPP_WARN(this->get_logger(), "Jacobian is near-singular, end-effector wrench may not be accurate");
+      }
+
+      // Calculate pseudo-inverse of J^T
+      Eigen::MatrixXd ee_jacobian_t_pinv = ee_jacobian.transpose().completeOrthogonalDecomposition().pseudoInverse();
+      // Calculate wrench as (J^T)^-1 * joint effort errors
+      Eigen::VectorXd eff_cmd = fdbk.getEffortCommand();
+      Eigen::VectorXd ee_wrench = ee_jacobian_t_pinv * (eff_cmd - eff);
+      
+      ee_wrench_msg_.header.stamp = this->now();
+      ee_wrench_msg_.header.frame_id = "base_link";
+      ee_wrench_msg_.wrench.force.x = ee_wrench(0);
+      ee_wrench_msg_.wrench.force.y = ee_wrench(1);
+      ee_wrench_msg_.wrench.force.z = ee_wrench(2);
+      ee_wrench_msg_.wrench.torque.x = ee_wrench(3);
+      ee_wrench_msg_.wrench.torque.y = ee_wrench(4);
+      ee_wrench_msg_.wrench.torque.z = ee_wrench(5);
+      
+      ee_wrench_publisher_->publish(ee_wrench_msg_);
     }
-
-    // Calculate pseudo-inverse of J^T
-    Eigen::MatrixXd ee_jacobian_t_pinv = ee_jacobian.transpose().completeOrthogonalDecomposition().pseudoInverse();
-    // Calculate wrench as (J^T)^-1 * joint effort errors
-    Eigen::VectorXd eff_cmd = fdbk.getEffortCommand();
-    Eigen::VectorXd ee_wrench = ee_jacobian_t_pinv * (eff_cmd - eff);
-    
-    ee_wrench_msg_.header.stamp = this->now();
-    ee_wrench_msg_.header.frame_id = "base_link";
-    ee_wrench_msg_.wrench.force.x = ee_wrench(0);
-    ee_wrench_msg_.wrench.force.y = ee_wrench(1);
-    ee_wrench_msg_.wrench.force.z = ee_wrench(2);
-    ee_wrench_msg_.wrench.torque.x = ee_wrench(3);
-    ee_wrench_msg_.wrench.torque.y = ee_wrench(4);
-    ee_wrench_msg_.wrench.torque.z = ee_wrench(5);
-    
-    ee_wrench_publisher_->publish(ee_wrench_msg_);
 
     // Calculate end-effector force based on end-effector position error
     Eigen::Vector3d ee_pos_cmd;
@@ -1357,6 +1375,20 @@ private:
     }
     RCLCPP_INFO(this->get_logger(), "Arm connected.");
     num_joints_ = arm_->size();
+    
+    // Resize vectors based on actual number of joints
+    home_position_.resize(num_joints_);
+    home_position_.fill(0.01);
+    ik_seed_.resize(num_joints_);
+    ik_seed_.fill(std::numeric_limits<double>::quiet_NaN());
+    
+    // Inform user about DOF-specific features
+    if (num_joints_ < 6) {
+      RCLCPP_INFO(this->get_logger(), "Arm has %d DOF. Full 6-DOF wrench control is disabled (requires 6+ DOF).", num_joints_);
+    } else {
+      RCLCPP_INFO(this->get_logger(), "Arm has %d DOF. All features enabled.", num_joints_);
+    }
+    
     arm_->update();
 
     auto arm_config_user_data = arm_config->getUserData();
