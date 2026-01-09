@@ -1273,13 +1273,13 @@ private:
         auto mag_diff = (xyz_positions.col(i) - fk_check).norm();
 
         if (mag_diff > 0.01) {
-          RCLCPP_WARN_STREAM(this->get_logger(), "IK Solution: "
-                                                    << last_position[0] << " | "
-                                                    << last_position[1] << " | "
-                                                    << last_position[2] << " | "
-                                                    << last_position[3] << " | "
-                                                    << last_position[4] << " | "
-                                                    << last_position[5]);
+          std::stringstream ik_solution_str;
+          ik_solution_str << "IK Solution: ";
+          for (int j = 0; j < last_position.size(); ++j) {
+            if (j > 0) ik_solution_str << " | ";
+            ik_solution_str << last_position[j];
+          }
+          RCLCPP_WARN_STREAM(this->get_logger(), ik_solution_str.str());
           RCLCPP_WARN_STREAM(this->get_logger(), "Pose of IK Solution: "
                                                    << fk_check[0] << ", "
                                                    << fk_check[1] << ", "
