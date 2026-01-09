@@ -934,23 +934,28 @@ private:
     Eigen::VectorXd times(1);
     times(0) = jog_msg->duration;
 
-    // Get current position and orientation
-    // (We use the last position command for smoother motion)
-    Eigen::Vector3d cur_pos;  // Not used
-    Eigen::Matrix3d cur_orientation;
-    arm_->FK(arm_->lastFeedback().getPositionCommand(), cur_pos, cur_orientation);
-
-    // Convert orientation to Euler angles
-    Eigen::Matrix3Xd cur_euler = cur_orientation.eulerAngles(0, 1, 2);
-
     target_xyz[0] += jog_msg->dx;
     target_xyz[1] += jog_msg->dy;
     target_xyz[2] += jog_msg->dz;
     // Limit the target position to be within the maximum radius
     target_xyz *= std::min(1.0, max_target_radius_ / target_xyz.norm());
 
-    // Replan
-    updateSE3Waypoints(use_traj_times_, times, target_xyz, &cur_euler, true);
+    // Replan with or without orientation constraint
+    if (jog_msg->constrain_orientation) {
+      // Get current position and orientation
+      // (We use the last position command for smoother motion)
+      Eigen::Vector3d cur_pos;  // Not used
+      Eigen::Matrix3d cur_orientation;
+      arm_->FK(arm_->lastFeedback().getPositionCommand(), cur_pos, cur_orientation);
+
+      // Convert orientation to Euler angles
+      Eigen::Matrix3Xd cur_euler = cur_orientation.eulerAngles(0, 1, 2);
+      
+      updateSE3Waypoints(use_traj_times_, times, target_xyz, &cur_euler, true);
+    } else {
+      // Position only - no orientation constraint
+      updateSE3Waypoints(use_traj_times_, times, target_xyz, nullptr, true);
+    }
   }
 
   // "Jog" the target end effector location in SE(3), replanning
