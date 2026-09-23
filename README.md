@@ -266,6 +266,50 @@ Install the ROS 2 joy package and connect your game controller:
 sudo apt install ros-$ROS_DISTRO-joy
 ```
 
+## Group Node
+
+The Group Node is provided as a lightweight wrapper around a group of HEBI actuators (a `hebi.Group` object in the HEBI APIs), exposing feedback on a "joint states" channel and allowing basic control of the actuators.
+
+**Important:** While the group node allows a minimal configuration path to start controlling the actuators, it severely limits you from using the full capabilities of the HEBI system and APIs (such as kinematics and dynamics helpers).  For most applications, we recommend exposing higher-level commands, feedback, and services over ROS topics, and keeping system control and coordination logic within the node itself (as shown with the arm node or full kit examples).
+
+**Subscribers**
+- */joint_waypoints [trajectory_msgs/msg/JointTrajectory]*: Commands the actuators to smoothly move from their current position to the given waypoints using minimum jerk trajectories.  The time values in the JointTrajectory message are treated as relative to the current time.
+- */joint_target [trajectory_msgs/msg/JointTrajectoryPoint]*: Commands the actuators to immediately command the given position, velocity, and effort.  Note that this does not provide a smooth motion to the target point, and is instead designed to be used as a direct command interface for a high level control loop running at or above ~100Hz.
+
+**Publishers**
+- */joint_states [sensor_msgs/msg/JointState]*: Publishes joint angles, velocity, and effort for each of the actuators in the group. The rate of these messages (as well as the overall control loop to the actuators) is controlled by the feedback frequency parameter.
+
+**Services**
+- */set_gains_file [hebi_msgs/srv/SetGainsFile]*: Send a URI for a gains file to set on the module, in the format of "package://<package name>/path/to/gains.xml.  Returns success if package exists, file is found, file can be loaded properly for the given group size, and file is successfully sent to the group.
+
+**Parameters**
+- *families*: A vector of module families used to try to find the modules on the network.  If this is of length one, this family name applies to all names.  Defaults to `["HEBI"]`
+- *names*: A vector of module names used to try to find the modules on the network.  This parameter is required when launching the node.
+- *gains_package*: Package name where gains file resolves
+- *gains_file*: Package-relative path to a gains file which is set at node initialization
+- *message_timeout*: The length of time to wait for new joint target message before clearing the previously commanded one.
+- *command_lifetime*: Hardware-level setting indicated how many seconds a current command stays active on a module while waiting for another command.  Maps directly to the HEBI Group's command_lifetime parameter. 
+- *feedback_frequency*: The rate of communication with the HEBI group, in Hz; note that this directly affects the publishing rate on `joint_states` as a message is published each time new feedback is received from the HEBI modules.
+
+**NOTE:** The `families`, `names`, `gains_package`, `gains_file`, and `message_timeout` parameters are specified at launch and cannot be modified at runtime. However, `command_lifetime` and `feedback_frequency` are dynamic parameters that can be adjusted while the node is running.
+
+### Launching the Group Node
+
+To launch the grouop node, use:
+```bash
+ros2 launch hebi_ros2_examples group_node.launch.py names:=["<your_actuator_name_1>","<your_actuator_name_2>",...]
+```
+**NOTE:** Remember to build your workspace and source your setup before running the above command.
+
+#### Launch Arguments
+| Argument         | Default                      | Description                                                                   |
+|------------------|------------------------------|-------------------------------------------------------------------------------|
+| `names`          | (required)                   | List of names of the module to use to form a group (e.g., ["J0","J1"]).       |
+| `families`       | `["HEBI"]`                   | List of families of the modules to use to form a group (e.g., ["HEBI"]).      |
+| `gains_package`  | `""`                         | ROS package containing the initial gains file.                                |
+| `gains_file`     | `""`                         | Path to the configuration file, relative to `gains_package`.                  |
+| `prefix`         | `""`                         | Namespace for topics.                                                         |
+
 ## ROS 2 Control
 
 **⚠️ Important Note for ROS 2 Jazzy Users**
