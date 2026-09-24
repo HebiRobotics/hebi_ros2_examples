@@ -197,6 +197,7 @@ install(PROGRAMS
   scripts/ex_teach_repeat_mobileio.py
   scripts/ex_teleop_mobileio.py
   scripts/ex_haptic_teleop_node.py
+  scripts/group_node.py
   scripts/mobile_io/mobile_io_node.py
   scripts/mobile_io/record_and_play_io.py
   scripts/mobile_io/rosie_io.py
